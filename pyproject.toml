@@ -1,7 +1,14 @@
 [project]
-name = "personal-scripts"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = []
+  name = "personal-scripts"
+  version = "0.1.0"
+  description = "Add your description here"
+  readme = "README.md"
+  requires-python = ">=3.12"
+  dependencies = [
+    "exifread",
+    "typer",
+    "rich",
+]
+
+[dependency-groups]
+  dev = ["ipython"]
