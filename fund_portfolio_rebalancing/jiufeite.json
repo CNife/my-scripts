@@ -1,0 +1,32 @@
+{
+    "assets": [
+        {
+            "name": "红利低波",
+            "target_weight": 0.15
+        },
+        {
+            "name": "自由现金流",
+            "target_weight": 0.14
+        },
+        {
+            "name": "港股红利",
+            "target_weight": 0.14
+        },
+        {
+            "name": "长期国债",
+            "target_weight": 0.14
+        },
+        {
+            "name": "黄金",
+            "target_weight": 0.15
+        },
+        {
+            "name": "纳指",
+            "target_weight": 0.14
+        },
+        {
+            "name": "标普",
+            "target_weight": 0.14
+        }
+    ]
+}

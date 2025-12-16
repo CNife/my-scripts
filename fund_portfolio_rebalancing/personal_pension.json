@@ -1,0 +1,16 @@
+{
+    "assets": [
+        {
+            "name": "红利",
+            "target_weight": 0.5
+        },
+        {
+            "name": "大盘",
+            "target_weight": 0.3
+        },
+        {
+            "name": "成长",
+            "target_weight": 0.2
+        }
+    ]
+}
