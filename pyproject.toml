@@ -8,6 +8,8 @@
     "exifread",
     "typer",
     "rich",
+    "scipy>=1.16.3",
+    "pandas>=2.3.3",
 ]
 
 [dependency-groups]
