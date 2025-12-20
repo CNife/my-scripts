@@ -3,33 +3,33 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
+import typer
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
 from scipy.optimize import minimize
-import typer
-
 
 console = Console()
-app = typer.Typer(help="Fund portfolio rebalancing helper.")
+app = typer.Typer(help="基金投资组合再平衡助手")
 
 
 @dataclass
 class AllocationParams:
-    asset_names: List[str]
+    """投资组合分配参数"""
+    asset_names: list[str]
     current_values: np.ndarray
     target_weights: np.ndarray
     target_total_value: float
-    additional_capital: int  # integer total additional capital
+    additional_capital: int  # 整数追加资金总额
     only_buy: bool
 
 
 @dataclass
 class AllocationResult:
-    asset_names: List[str]
+    """投资组合分配结果"""
+    asset_names: list[str]
     current_values: np.ndarray
     additional_allocations: np.ndarray
     new_values: np.ndarray
@@ -45,7 +45,7 @@ class AllocationResult:
 
 
 def round_to_int_with_fixed_sum(values: np.ndarray, total_int: int) -> np.ndarray:
-    """Round a float vector to integers while preserving the exact integer sum."""
+    """将浮点数向量四舍五入为整数，同时保持整数总和不变"""
     floor = np.floor(values).astype(int)
     remainder = int(total_int - floor.sum())
     if remainder <= 0:
@@ -63,8 +63,9 @@ def optimize_integer_allocation(
     current_values: np.ndarray,
     target_weights: np.ndarray,
     target_total_value: float,
+    only_buy: bool = False,
 ) -> np.ndarray:
-    """Search for a good integer allocation near the continuous optimum."""
+    """在连续最优解附近搜索良好的整数分配方案"""
 
     def objective_int(integer_allocations: np.ndarray) -> float:
         new_values = current_values + integer_allocations
@@ -88,6 +89,9 @@ def optimize_integer_allocation(
                 candidate = allocations_int.copy()
                 candidate[i] -= 1
                 candidate[j] += 1
+                # 检查只买不卖约束
+                if only_buy and candidate[i] < 0:
+                    continue
                 value = objective_int(candidate)
                 if value < best_value - 1e-12:
                     allocations_int = candidate
@@ -97,7 +101,7 @@ def optimize_integer_allocation(
 
 
 def compute_optimal_allocation(params: AllocationParams) -> AllocationResult:
-    """Run continuous optimization and integer adjustment for portfolio rebalancing."""
+    """运行连续优化和整数调整，进行投资组合再平衡"""
     asset_names = params.asset_names
     current_values = params.current_values
     target_weights = params.target_weights
@@ -107,25 +111,25 @@ def compute_optimal_allocation(params: AllocationParams) -> AllocationResult:
 
     n_assets = len(asset_names)
     if not (len(current_values) == len(target_weights) == n_assets):
-        raise ValueError("asset_names, current_values and target_weights must have the same length.")
+        raise ValueError("asset_names、current_values 和 target_weights 的长度必须相同")
 
     current_total_value = float(current_values.sum())
 
-    # Continuous objective
+    # 连续优化目标函数
     def objective(allocations: np.ndarray) -> float:
         new_values = current_values + allocations
         new_weights = new_values / target_total_value
         weight_diff = new_weights - target_weights
         return float(np.sum(weight_diff**2))
 
-    # Constraints
+    # 约束条件
     def constraint_sum(allocations: np.ndarray) -> float:
         return float(np.sum(allocations) - additional_capital)
 
     constraints = [{"type": "eq", "fun": constraint_sum}]
     if only_buy:
         # x_i >= 0  -> min(allocations) >= 0
-        constraints.append({"type": "ineq", "fun": lambda allocations: allocations})
+        constraints.append({"type": "ineq", "fun": lambda allocations: np.min(allocations)})
 
     x0 = np.ones(n_assets) * (additional_capital / n_assets if n_assets else 0.0)
 
@@ -139,7 +143,7 @@ def compute_optimal_allocation(params: AllocationParams) -> AllocationResult:
     )
 
     if not result.success:
-        raise RuntimeError(f"Optimization failed: {result.message}")
+        raise RuntimeError(f"优化失败: {result.message}")
 
     integer_allocations = optimize_integer_allocation(
         continuous_allocations=result.x,
@@ -147,6 +151,7 @@ def compute_optimal_allocation(params: AllocationParams) -> AllocationResult:
         current_values=current_values,
         target_weights=target_weights,
         target_total_value=target_total_value,
+        only_buy=only_buy,
     )
 
     new_values = current_values + integer_allocations
@@ -188,39 +193,35 @@ def format_percent_signed(value: float) -> str:
     return f"{value * 100:+.2f}%"
 
 
-def load_portfolio_config(config_path: Path) -> tuple[List[str], np.ndarray]:
-    """Load portfolio configuration from JSON file."""
+def load_portfolio_config(config_path: Path) -> tuple[list[str], np.ndarray]:
+    """从JSON文件加载投资组合配置"""
     if not config_path.is_file():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+        raise FileNotFoundError(f"配置文件未找到: {config_path}")
 
     with config_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
     assets = data.get("assets")
     if not assets or not isinstance(assets, list):
-        raise ValueError("Config file must contain an 'assets' list.")
+        raise ValueError("配置文件必须包含 'assets' 列表")
 
-    asset_names: List[str] = []
-    target_weights: List[float] = []
-    for asset in assets:
-        name = asset.get("name")
-        weight = asset.get("target_weight")
-        if name is None or weight is None:
-            raise ValueError("Each asset must have 'name' and 'target_weight'.")
-        asset_names.append(str(name))
-        target_weights.append(float(weight))
+    try:
+        asset_names = [str(asset["name"]) for asset in assets]
+        target_weights = [float(asset["target_weight"]) for asset in assets]
+    except KeyError as e:
+        raise ValueError(f"资产配置缺少必要字段: {e}") from e
 
     target_weights_array = np.array(target_weights, dtype=float)
     weight_sum = float(target_weights_array.sum())
     if not np.isclose(weight_sum, 1.0, atol=1e-6):
-        raise ValueError(f"Sum of target_weight must be 1.0, got {weight_sum:.6f}")
+        raise ValueError(f"目标权重总和必须为 1.0，实际为 {weight_sum:.6f}")
 
     return asset_names, target_weights_array
 
 
-def prompt_current_values(asset_names: List[str]) -> np.ndarray:
-    """Interactively ask user to input current value for each asset."""
-    values: List[float] = []
+def prompt_current_values(asset_names: list[str]) -> np.ndarray:
+    """交互式询问用户输入每个资产的当前市值"""
+    values: list[float] = []
     for name in asset_names:
         while True:
             raw = Prompt.ask(f"请输入标的当前市值（元）: [bold]{name}[/]")
@@ -238,7 +239,7 @@ def prompt_current_values(asset_names: List[str]) -> np.ndarray:
 
 
 def print_allocation_result(result: AllocationResult) -> None:
-    """Render allocation result using Rich."""
+    """使用Rich渲染分配结果"""
     console.print("[bold]===== 基础数据 =====[/bold]")
     mode_text = "只买不卖 (only buy)" if result.only_buy else "允许卖出 (allow sell)"
     console.print(f"模式: [cyan]{mode_text}[/cyan]")
@@ -291,33 +292,31 @@ def main(
         Path("portfolio.json"),
         "--config",
         "-c",
-        help="Path to portfolio configuration JSON file.",
+        help="投资组合配置JSON文件路径",
     ),
-    target_total: Optional[float] = typer.Option(
+    target_total: float | None = typer.Option(
         None,
         "--target-total",
-        help="Target total portfolio value. Cannot be used together with --additional-cash.",
+        help="目标投资组合总市值。不能与 --additional-cash 同时使用",
     ),
-    additional_cash: Optional[float] = typer.Option(
+    additional_cash: float | None = typer.Option(
         None,
         "--additional-cash",
-        help="Total additional cash to invest (can be negative for net sell). "
-        "Cannot be used together with --target-total.",
+        help="追加投资的总金额（可为负数表示净卖出）。不能与 --target-total 同时使用",
     ),
-    current_values: Optional[List[float]] = typer.Option(
+    current_values: list[float] | None = typer.Option(
         None,
         "--current-values",
-        help="Current values of each asset, in the same order as in the config file. "
-        "If not provided, you will be prompted to input them interactively.",
+        help="各资产当前市值，顺序需与配置文件一致。如未提供，将交互式询问输入",
     ),
     only_buy: bool = typer.Option(
         False,
         "--only-buy/--allow-sell",
-        help="Enable only-buy mode (no negative allocations). Default is allow-sell.",
+        help="启用只买不卖模式（不允许负分配）。默认为允许卖出",
     ),
 ) -> None:
     """
-    Rebalance a fund portfolio according to target weights.
+    根据目标权重对基金投资组合进行再平衡
     """
     if (target_total is None and additional_cash is None) or (target_total is not None and additional_cash is not None):
         console.print("[red]必须且只能提供 --target-total 或 --additional-cash 其中一个参数。[/red]")
