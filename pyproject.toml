@@ -4,13 +4,7 @@
   description = "Add your description here"
   readme = "README.md"
   requires-python = ">=3.12"
-  dependencies = [
-    "exifread",
-    "typer",
-    "rich",
-    "scipy>=1.16.3",
-    "pandas>=2.3.3",
-]
+  dependencies = ["exifread", "typer", "rich", "scipy>=1.16.3", "pandas>=2.3.3", "peewee>=3.18.3", "openpyxl>=3.1.5"]
 
 [dependency-groups]
   dev = ["ipython"]
