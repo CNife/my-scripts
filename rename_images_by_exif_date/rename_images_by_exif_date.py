@@ -76,7 +76,11 @@ def read_exif(image: Path) -> dict:
 
 
 def make_new_name(old_image: Path, exif: dict) -> str | None:
-    datetime_tag = exif.get("EXIF DateTimeOriginal") or exif.get("EXIF DateTimeDigitized") or exif.get("Image DateTime")
+    datetime_tag = (
+        exif.get("EXIF DateTimeOriginal")
+        or exif.get("EXIF DateTimeDigitized")
+        or exif.get("Image DateTime")
+    )
     if not datetime_tag:
         return None
 
@@ -90,7 +94,10 @@ def make_new_name(old_image: Path, exif: dict) -> str | None:
 
 def parse_exif_datetime(raw: str) -> datetime:
     s = raw.strip()
-    m = re.match(r"(\d{4})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})\s+(\d{1,2})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})", s)
+    m = re.match(
+        r"(\d{4})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})\s+(\d{1,2})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})",
+        s,
+    )
     if not m:
         raise ValueError(f"Invalid EXIF datetime: {raw}")
     y, mo, d, h, mi, se = map(int, m.groups())

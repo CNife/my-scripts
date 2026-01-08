@@ -18,6 +18,7 @@ app = typer.Typer(help="基金投资组合再平衡助手")
 @dataclass
 class AllocationParams:
     """投资组合分配参数"""
+
     asset_names: list[str]
     current_values: np.ndarray
     target_weights: np.ndarray
@@ -29,6 +30,7 @@ class AllocationParams:
 @dataclass
 class AllocationResult:
     """投资组合分配结果"""
+
     asset_names: list[str]
     current_values: np.ndarray
     additional_allocations: np.ndarray
@@ -244,8 +246,13 @@ def print_allocation_result(result: AllocationResult) -> None:
     mode_text = "只买不卖 (only buy)" if result.only_buy else "允许卖出 (allow sell)"
     console.print(f"模式: [cyan]{mode_text}[/cyan]")
     console.print(f"现有总市值: [green]{format_currency_2(result.current_total_value)}[/green] 元")
-    console.print(f"追加资金（整数）: [green]{format_currency_int(result.additional_capital)}[/green] 元")
-    console.print(f"变动后总市值（整数追加）: [green]{format_currency_2(result.target_total_value)}[/green] 元")
+    console.print(
+        f"追加资金（整数）: [green]{format_currency_int(result.additional_capital)}[/green] 元"
+    )
+    console.print(
+        "变动后总市值（整数追加）: "
+        f"[green]{format_currency_2(result.target_total_value)}[/green] 元"
+    )
 
     table = Table(title="资金分配结果")
     table.add_column("资产", justify="left")
@@ -289,15 +296,10 @@ def print_allocation_result(result: AllocationResult) -> None:
 @app.command()
 def main(
     config: Path = typer.Option(
-        Path("portfolio.json"),
-        "--config",
-        "-c",
-        help="投资组合配置JSON文件路径",
+        Path("portfolio.json"), "--config", "-c", help="投资组合配置JSON文件路径"
     ),
     target_total: float | None = typer.Option(
-        None,
-        "--target-total",
-        help="目标投资组合总市值。不能与 --additional-cash 同时使用",
+        None, "--target-total", help="目标投资组合总市值。不能与 --additional-cash 同时使用"
     ),
     additional_cash: float | None = typer.Option(
         None,
@@ -310,16 +312,18 @@ def main(
         help="各资产当前市值，顺序需与配置文件一致。如未提供，将交互式询问输入",
     ),
     only_buy: bool = typer.Option(
-        False,
-        "--only-buy/--allow-sell",
-        help="启用只买不卖模式（不允许负分配）。默认为允许卖出",
+        False, "--only-buy/--allow-sell", help="启用只买不卖模式（不允许负分配）。默认为允许卖出"
     ),
 ) -> None:
     """
     根据目标权重对基金投资组合进行再平衡
     """
-    if (target_total is None and additional_cash is None) or (target_total is not None and additional_cash is not None):
-        console.print("[red]必须且只能提供 --target-total 或 --additional-cash 其中一个参数。[/red]")
+    if (target_total is None and additional_cash is None) or (
+        target_total is not None and additional_cash is not None
+    ):
+        console.print(
+            "[red]必须且只能提供 --target-total 或 --additional-cash 其中一个参数。[/red]"
+        )
         raise typer.Exit(1)
 
     try:
@@ -364,7 +368,7 @@ def main(
 
     try:
         result = compute_optimal_allocation(params)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         console.print(f"[red]优化计算失败: {exc}[/red]")
         raise typer.Exit(1) from exc
 

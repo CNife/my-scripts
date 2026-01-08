@@ -29,7 +29,9 @@ def main(
         future_to_image = {executor.submit(calculate_md5, image): image for image in images}
 
         # 使用进度条跟踪完成情况
-        for future in track(as_completed(future_to_image), total=len(images), description="计算哈希值"):
+        for future in track(
+            as_completed(future_to_image), total=len(images), description="计算哈希值"
+        ):
             image = future_to_image[future]
             try:
                 file_hash = future.result(timeout=30)  # 30秒超时
@@ -113,7 +115,9 @@ def display_images_table(console: Console, images: list[Path]) -> None:
             from datetime import datetime
 
             mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
-            size_str = f"{size / 1024:.1f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB"
+            size_str = (
+                f"{size / 1024:.1f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB"
+            )
         except Exception:
             size_str = "未知"
             mtime_str = "未知"
