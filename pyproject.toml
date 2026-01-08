@@ -7,4 +7,12 @@
   dependencies = ["exifread", "typer", "rich", "scipy>=1.16.3", "pandas>=2.3.3", "peewee>=3.18.3", "openpyxl>=3.1.5"]
 
 [dependency-groups]
-  dev = ["ipython"]
+  dev = ["ipython", "pre-commit"]
+
+[tool.ruff]
+  target-version = "py314"
+  line-length = 100
+
+  [tool.ruff.lint]
+    extend-select = ["E", "F", "UP", "W", "RUF"]
+    ignore = ["RUF001", "RUF002", "RUF003"]
