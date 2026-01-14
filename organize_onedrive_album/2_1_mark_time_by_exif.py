@@ -21,10 +21,20 @@ def main(
 ) -> None:
     db_path_obj = Path(db_path)
     images = list_images(image_dir)
+    stats = {"total": len(images), "skipped": 0, "success": 0, "no_time": 0, "error": 0}
     with sqlite3.connect(db_path_obj) as connection:
-        create_table(connection)
         for image in tqdm(images, desc="处理图像"):
-            process_image(connection, image)
+            result = process_image(connection, image)
+            if result == "skipped":
+                stats["skipped"] += 1
+            elif result == "success":
+                stats["success"] += 1
+            elif result == "no_time":
+                stats["no_time"] += 1
+            elif result == "error":
+                stats["error"] += 1
+
+    print_summary(stats)
 
 
 def list_images(image_dir: Path) -> list[Path]:
@@ -37,20 +47,6 @@ def list_images(image_dir: Path) -> list[Path]:
     return result_images
 
 
-def create_table(connection: sqlite3.Connection) -> None:
-    with connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS image_datetimes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                path TEXT NOT NULL UNIQUE,
-                time TEXT
-            )
-            """
-        )
-        connection.commit()
-
-
 def should_skip(connection: sqlite3.Connection, image_path: str) -> bool:
     cursor = connection.execute(
         "SELECT COUNT(*) FROM image_datetimes WHERE path = ? AND time IS NOT NULL", (image_path,)
@@ -59,21 +55,26 @@ def should_skip(connection: sqlite3.Connection, image_path: str) -> bool:
     return count > 0
 
 
-def process_image(connection: sqlite3.Connection, image: Path) -> None:
+def process_image(connection: sqlite3.Connection, image: Path) -> str:
+    """处理单个图像，返回处理结果：'skipped', 'success', 'no_time', 'error'"""
     try:
         image_path = str(image.absolute())
         if should_skip(connection, image_path):
-            return
+            return "skipped"
 
         exif = read_exif(image)
         image_datetime = get_exif_datetime(exif)
         save_data(connection, image_path, image_datetime)
+        return "success" if image_datetime else "no_time"
     except Exception as e:
         print(f"处理图像 {image} 时出错: {e}")
+        return "error"
 
 
 def read_exif(image: Path) -> dict:
-    """使用 Pillow 读取 EXIF 数据，支持 HEIF/HEIC 和 PNG"""
+    """使用 Pillow 读取 EXIF 数据，支持 HEIF/HEIC 和 PNG
+    同时读取主 IFD 和 Exif IFD 中的数据
+    """
     try:
         with Image.open(image) as img:
             exif_data = img.getexif()
@@ -81,9 +82,20 @@ def read_exif(image: Path) -> dict:
                 return {}
             # 将 EXIF tag 编号转换为可读的标签名
             exif_dict = {}
+            # 读取主 IFD 的数据
             for tag_id, value in exif_data.items():
                 tag_name = TAGS.get(tag_id, tag_id)
                 exif_dict[tag_name] = value
+            # 读取 Exif IFD 的数据（包含 DateTimeOriginal 等）
+            try:
+                if hasattr(exif_data, "get_ifd"):
+                    exif_ifd = exif_data.get_ifd(0x8769)  # Exif IFD
+                    for tag_id, value in exif_ifd.items():
+                        tag_name = TAGS.get(tag_id, tag_id)
+                        # Exif IFD 中的标签优先（如 DateTimeOriginal）
+                        exif_dict[tag_name] = value
+            except Exception:
+                ...  # 如果没有 Exif IFD，继续使用主 IFD 的数据
             return exif_dict
     except Exception:
         return {}
@@ -105,13 +117,21 @@ def get_exif_datetime(exif: dict) -> datetime | None:
 
 
 def parse_exif_datetime(raw: str) -> datetime:
-    """解析 EXIF 时间字符串，格式：YYYY:MM:DD HH:MM:SS"""
+    """解析 EXIF 时间字符串，支持多种格式：
+    - 标准格式：YYYY:MM:DD HH:MM:SS
+    - 带空格的格式：YYYY: M:DD  H:MM:SS 或 YYYY: M: D  H:MM:SS
+    """
     s = raw.strip()
+    # 规范化字符串：将多个连续空格替换为单个空格，统一处理各种空格变体
+    normalized = re.sub(r"\s+", " ", s)
+    # 匹配格式：YYYY:MM:DD HH:MM:SS 或 YYYY: M:DD H:MM:SS 等变体
+    # \s* 允许冒号前后有空格，\s+ 要求日期和时间之间至少有一个空格
     m = re.match(
-        r"(\d{4})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})\s+(\d{1,2})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})", s
+        r"(\d{4})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})\s+(\d{1,2})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})",
+        normalized,
     )
     if not m:
-        raise ValueError(f"Invalid EXIF datetime: {raw}")
+        raise ValueError(f"Invalid EXIF datetime format: {raw!r}")
     y, mo, d, h, mi, se = map(int, m.groups())
     return datetime(y, mo, d, h, mi, se)
 
@@ -126,6 +146,19 @@ def save_data(
             (image_path, time_str),
         )
         connection.commit()
+
+
+def print_summary(stats: dict[str, int]) -> None:
+    """打印处理总结"""
+    print("\n" + "=" * 50)
+    print("处理总结")
+    print("=" * 50)
+    print(f"总图像数量: {stats['total']}")
+    print(f"  跳过（已有时间信息）: {stats['skipped']}")
+    print(f"  成功提取时间: {stats['success']}")
+    print(f"  无时间信息: {stats['no_time']}")
+    print(f"  处理出错: {stats['error']}")
+    print("=" * 50)
 
 
 if __name__ == "__main__":
