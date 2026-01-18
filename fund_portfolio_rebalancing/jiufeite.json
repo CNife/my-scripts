@@ -2,31 +2,31 @@
     "assets": [
         {
             "name": "红利低波",
-            "target_weight": 0.15
+            "target_weight": 0.143
         },
         {
             "name": "自由现金流",
-            "target_weight": 0.14
+            "target_weight": 0.143
         },
         {
             "name": "港股红利",
-            "target_weight": 0.14
+            "target_weight": 0.143
         },
         {
             "name": "长期国债",
-            "target_weight": 0.14
+            "target_weight": 0.142
         },
         {
             "name": "黄金",
-            "target_weight": 0.15
+            "target_weight": 0.143
         },
         {
             "name": "纳指",
-            "target_weight": 0.14
+            "target_weight": 0.143
         },
         {
             "name": "标普",
-            "target_weight": 0.14
+            "target_weight": 0.143
         }
     ]
 }
