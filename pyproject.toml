@@ -15,6 +15,7 @@
     "tqdm",
     "pillow>=10.0.0",
     "pillow-heif>=0.13.0",
+    "tushare>=1.4.24",
   ]
 
 [dependency-groups]
@@ -25,5 +26,5 @@
   line-length = 100
 
   [tool.ruff.lint]
-    extend-select = ["E", "F", "UP", "W", "RUF"]
-    ignore = ["RUF001", "RUF002", "RUF003", "S607"]
+    extend-select = ["B", "C4", "I", "PIE", "RUF", "S", "SIM", "UP", "W"]
+    ignore = ["RUF001", "RUF002", "RUF003", "S607", "S101"]
