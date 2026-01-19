@@ -2,30 +2,37 @@
     "assets": [
         {
             "name": "红利低波",
+            "code": "020602.OF",
             "target_weight": 0.143
         },
         {
             "name": "自由现金流",
+            "code": "023917.OF",
             "target_weight": 0.143
         },
         {
             "name": "港股红利",
+            "code": "021457.OF",
             "target_weight": 0.143
         },
         {
             "name": "长期国债",
+            "code": "006961.OF",
             "target_weight": 0.142
         },
         {
             "name": "黄金",
+            "code": "008701.OF",
             "target_weight": 0.143
         },
         {
             "name": "纳指",
+            "code": "018043.OF",
             "target_weight": 0.143
         },
         {
             "name": "标普",
+            "code": "017641.OF",
             "target_weight": 0.143
         }
     ]

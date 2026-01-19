@@ -2,10 +2,12 @@
     "assets": [
         {
             "name": "中证A500",
+            "code": "022438.OF",
             "target_weight": 0.5
         },
         {
             "name": "恒生科技",
+            "code": "013127.OF",
             "target_weight": 0.5
         }
     ]
