@@ -16,3 +16,6 @@ wheels/
 
 # OpenCode
 .sisyphus/
+
+# Chromium
+browser_profiles/
