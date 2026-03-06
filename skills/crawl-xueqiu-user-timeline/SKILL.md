@@ -1,9 +1,9 @@
 ---
-name: crawl-xueqiu-timeline
+name: crawl-xueqiu-user-timeline
 description: 抓取雪球用户的发言时间线，保存为 Markdown 文件
 ---
 
-# crawl-xueqiu-timeline
+# crawl-xueqiu-user-timeline
 
 抓取雪球用户的发言时间线，保存为 Markdown 文件。
 
@@ -11,7 +11,7 @@ description: 抓取雪球用户的发言时间线，保存为 Markdown 文件
 
 Base directory for this skill: `{base_dir}`
 
-**调用时请将 `{base_dir}` 替换为实际路径**，例如：`/home/cnife/code/try-agent-browser-automation/.agents/skills/crawl-xueqiu-timeline`
+**调用时请将 `{base_dir}` 替换为实际路径**，例如：`/home/cnife/code/try-agent-browser-automation/.agents/skills/crawl-xueqiu-user-timeline`
 
 确保 Chrome 处于 Debug 模式并安装 agent-browser：
 
@@ -25,7 +25,7 @@ sh {base_dir}/scripts/check-agent-browser.sh
 直接运行爬取脚本：
 
 ```bash
-{base_dir}/scripts/crawl_xueqiu_timeline_api.py <雪球用户主页链接> [选项]
+{base_dir}/scripts/crawl_xueqiu_user_timeline_api.py <雪球用户主页链接> [选项]
 ```
 
 ### 参数说明
@@ -44,19 +44,19 @@ sh {base_dir}/scripts/check-agent-browser.sh
 
 ```bash
 # 爬取最近 3 天（默认）
-{base_dir}/scripts/crawl_xueqiu_timeline_api.py https://xueqiu.com/u/9493911686
+{base_dir}/scripts/crawl_xueqiu_user_timeline_api.py https://xueqiu.com/u/9493911686
 
 # 爬取最近 7 天
-{base_dir}/scripts/crawl_xueqiu_timeline_api.py https://xueqiu.com/u/9493911686 --days 7
+{base_dir}/scripts/crawl_xueqiu_user_timeline_api.py https://xueqiu.com/u/9493911686 --days 7
 
 # 爬取最近 30 天
-{base_dir}/scripts/crawl_xueqiu_timeline_api.py https://xueqiu.com/u/9493911686 --days 30
+{base_dir}/scripts/crawl_xueqiu_user_timeline_api.py https://xueqiu.com/u/9493911686 --days 30
 
 # 指定日期范围
-{base_dir}/scripts/crawl_xueqiu_timeline_api.py https://xueqiu.com/u/9493911686 --start-date 2026-01-01 --end-date 2026-03-05
+{base_dir}/scripts/crawl_xueqiu_user_timeline_api.py https://xueqiu.com/u/9493911686 --start-date 2026-01-01 --end-date 2026-03-05
 
 # 指定输出文件名
-{base_dir}/scripts/crawl_xueqiu_timeline_api.py https://xueqiu.com/u/9493911686 -o my_timeline.md
+{base_dir}/scripts/crawl_xueqiu_user_timeline_api.py https://xueqiu.com/u/9493911686 -o my_timeline.md
 ```
 
 ## 输出格式
