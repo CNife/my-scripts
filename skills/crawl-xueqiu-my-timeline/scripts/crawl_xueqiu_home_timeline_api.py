@@ -111,8 +111,21 @@ def extract_quote_info(status: dict) -> tuple[str, str]:
     return quote_user, quote_text
 
 
-def parse_status(status: dict) -> dict:
-    """解析单条帖子数据"""
+def is_official_account(author: str, user_id: str | int) -> bool:
+    """判断是否为官方账号（上市公司、指数、ETF、系统账号）"""
+    import re
+
+    if user_id in [-1, 0, ""]:
+        return True
+
+    if "ETF" in author or "指数" in author:
+        return True
+
+    return bool(re.search(r".+\([\d\w\-]+\)$", author))
+
+
+def parse_status(status: dict) -> dict | None:
+    """解析单条帖子数据，如果是官方账号返回 None"""
     post_id = status.get("id", "")
     user_id = status.get("user_id", "")
     created_at = status.get("created_at", 0)
@@ -121,6 +134,11 @@ def parse_status(status: dict) -> dict:
     reply_count = status.get("reply_count", 0)
     like_count = status.get("like_count", 0)
     user_info = status.get("user", {})
+
+    author = user_info.get("screen_name", "")
+
+    if is_official_account(author, user_id):
+        return None
 
     content = clean_html(description)
     content = content[:500]
@@ -132,7 +150,7 @@ def parse_status(status: dict) -> dict:
     return {
         "post_id": post_id,
         "user_id": user_id,
-        "author": user_info.get("screen_name", ""),
+        "author": author,
         "post_time": parse_timestamp(created_at) if created_at else "未知时间",
         "content": content,
         "quote_user": quote_user,
@@ -176,33 +194,67 @@ def fetch_timeline_in_range(start_date: datetime, end_date: datetime) -> list:
     return all_statuses
 
 
+def group_by_author(posts: list[dict]) -> dict[str, list[dict]]:
+    """按发言人分组帖子"""
+    from collections import defaultdict
+
+    grouped = defaultdict(list)
+    for post in posts:
+        grouped[post["author"]].append(post)
+
+    for author in grouped:
+        grouped[author].sort(key=lambda p: p["post_time"], reverse=True)
+
+    return dict(grouped)
+
+
 def save_to_markdown(
     posts: list[dict], start_date: datetime, end_date: datetime, output_file: str
 ) -> None:
-    """保存为 Markdown 文件"""
+    """保存为 Markdown 文件（按发言人分组）"""
+    from collections import Counter
+
     content = []
 
     content.append(
         f"# 雪球首页关注时间线 ({start_date.strftime('%Y-%m-%d')} 至 {end_date.strftime('%Y-%m-%d')})\n"
     )
     content.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+
+    author_counts = Counter(post["author"] for post in posts)
+    content.append(f"共 {len(posts)} 条动态，{len(author_counts)} 位发言人\n")
+
+    content.append("## 发言统计\n")
+    content.append("| 发言人 | 帖子数 |")
+    content.append("|--------|--------|")
+    for author, count in sorted(author_counts.items(), key=lambda x: x[1], reverse=True):
+        content.append(f"| @{author} | {count} |")
+    content.append("")
+
     content.append("## 时间线\n")
 
-    for post in posts:
-        content.append(f"### {post['post_time']} - @{post['author']}\n")
+    grouped = group_by_author(posts)
+    sorted_authors = sorted(grouped.keys(), key=lambda a: len(grouped[a]), reverse=True)
 
-        if post["quote_user"]:
-            content.append(f"回复@{post['quote_user']}: {post['content']}\n")
-        else:
-            content.append(f"{post['content']}\n")
+    for author in sorted_authors:
+        author_posts = grouped[author]
+        content.append(f"### @{author} ({len(author_posts)} 条)\n")
 
-        if post["quote_content"]:
-            content.append(
-                f"> @{post['quote_user'] if post['quote_user'] else ''}: {post['quote_content']}\n"
-            )
+        for post in author_posts:
+            content.append(f"#### {post['post_time']}\n")
 
-        content.append(f"[查看原文]({post['url']})\n")
-        content.append("---\n")
+            if post["quote_user"]:
+                content.append(f"回复@{post['quote_user']}: {post['content']}\n")
+            else:
+                content.append(f"{post['content']}\n")
+
+            if post["quote_content"]:
+                content.append(
+                    f"> @{post['quote_user'] if post['quote_user'] else ''}: {post['quote_content']}\n"
+                )
+
+            content.append(f"[查看原文]({post['url']})\n")
+            content.append("---\n")
 
     Path(output_file).write_text("\n".join(content), encoding="utf-8")
     print(f"已保存到：{output_file}")
@@ -255,7 +307,7 @@ def main():
     print(f"获取到 {len(statuses)} 条动态")
 
     print("步骤 3: 解析帖子数据...")
-    posts = [parse_status(s) for s in statuses]
+    posts = [p for p in (parse_status(s) for s in statuses) if p is not None]
 
     if not output_file:
         start_str = start_date.strftime("%Y%m%d")
@@ -265,13 +317,14 @@ def main():
     print("步骤 4: 保存到 Markdown 文件...")
     save_to_markdown(posts, start_date, end_date, output_file)
 
-    print("\n=== 预览前 3 条动态 ===")
-    for i, post in enumerate(posts[:3], 1):
-        print(f"\n[动态{i}] {post['post_time']} - @{post['author']}")
-        if post["quote_user"]:
-            print(f"回复@{post['quote_user']}: {post['content'][:50]}...")
-        else:
-            print(f"内容：{post['content'][:50]}...")
+    print(f"\n=== 统计：共 {len(posts)} 条动态")
+    from collections import Counter
+
+    author_counts = Counter(post["author"] for post in posts)
+    print(f"=== 发言人：{len(author_counts)} 位")
+    print("\n=== 前 3 位发言人 ===")
+    for author, count in sorted(author_counts.items(), key=lambda x: x[1], reverse=True)[:3]:
+        print(f"@{author}: {count} 条")
 
 
 if __name__ == "__main__":
