@@ -30,6 +30,24 @@
       "eval_name": "短时爬取",
       "prompt": "帮我看看雪球最近 2 小时有什么新动态",
       "expected_output": "使用 --hours 2 参数爬取，生成对应的分析报告"
+    },
+    {
+      "id": 6,
+      "eval_name": "多用户 Subagent 调度测试",
+      "prompt": "爬取雪球最近 24 小时时间线，使用 subagent 分析所有发言人的观点并生成 PDF 报告",
+      "expected_output": "根据发言用户数量创建 TODO 列表，启动 subagent 分析（并发≤3），整合结果生成报告"
+    },
+    {
+      "id": 7,
+      "eval_name": "大量发言人场景",
+      "prompt": "帮我分析雪球上最近 3 天所有关注用户的发言，生成完整的投资分析报告",
+      "expected_output": "如果发言人>10 个，每个用户单独分配 TODO；3-10 个则每 3-5 个用户一个 TODO；<3 个则合并为 1 个 TODO"
+    },
+    {
+      "id": 8,
+      "eval_name": "Subagent 失败重试测试",
+      "prompt": "爬取雪球时间线并使用 subagent 分析，如果有 subagent 失败要重试",
+      "expected_output": "subagent 失败时自动重试最多 2 次，持续失败的在报告中标注'⚠️ 分析失败'"
     }
   ]
 }
