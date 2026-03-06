@@ -141,9 +141,12 @@ def parse_status(status: dict) -> dict | None:
         return None
 
     content = clean_html(description)
-    content = content[:500]
 
     quote_user, quote_content = extract_quote_info(status)
+
+    comment_chain = content.split("//")
+    author_content = comment_chain[0].strip()[:500]
+    commented_posts = [c.strip() for c in comment_chain[1:] if c.strip()]
 
     url = f"https://xueqiu.com/{user_id}/{post_id}" if post_id else ""
 
@@ -152,7 +155,8 @@ def parse_status(status: dict) -> dict | None:
         "user_id": user_id,
         "author": author,
         "post_time": parse_timestamp(created_at) if created_at else "未知时间",
-        "content": content,
+        "author_content": author_content,
+        "commented_posts": commented_posts,
         "quote_user": quote_user,
         "quote_content": quote_content[:300] if quote_content else "",
         "reposts": retweet_count,
@@ -243,15 +247,13 @@ def save_to_markdown(
         for post in author_posts:
             content.append(f"#### {post['post_time']}\n")
 
-            if post["quote_user"]:
-                content.append(f"回复@{post['quote_user']}: {post['content']}\n")
-            else:
-                content.append(f"{post['content']}\n")
+            content.append(f"{post['author_content']}\n")
+
+            for commented in post["commented_posts"]:
+                content.append(f"//{commented}\n")
 
             if post["quote_content"]:
-                content.append(
-                    f"> @{post['quote_user'] if post['quote_user'] else ''}: {post['quote_content']}\n"
-                )
+                content.append(f"> @{post['quote_user']}: {post['quote_content']}\n")
 
             content.append(f"[查看原文]({post['url']})\n")
             content.append("---\n")
