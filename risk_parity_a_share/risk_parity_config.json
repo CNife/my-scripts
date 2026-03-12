@@ -1,0 +1,53 @@
+{
+    "etfs": [
+        {
+            "name": "沪深300ETF",
+            "code": "510300",
+            "category": "stock",
+            "description": "大盘蓝筹指数"
+        },
+        {
+            "name": "中证500ETF",
+            "code": "510500",
+            "category": "stock",
+            "description": "中盘成长指数"
+        },
+        {
+            "name": "创业板ETF",
+            "code": "159915",
+            "category": "stock",
+            "description": "小盘成长指数"
+        },
+        {
+            "name": "红利ETF",
+            "code": "510880",
+            "category": "stock",
+            "description": "高股息策略"
+        },
+        {
+            "name": "黄金ETF",
+            "code": "518880",
+            "category": "commodity",
+            "description": "黄金现货"
+        },
+        {
+            "name": "国债ETF",
+            "code": "511010",
+            "category": "bond",
+            "description": "中期国债"
+        },
+        {
+            "name": "货币ETF",
+            "code": "511880",
+            "category": "cash",
+            "description": "货币市场工具"
+        }
+    ],
+    "settings": {
+        "default_date_range": "1y",
+        "start_date": "20250313",
+        "end_date": "20260313",
+        "risk_target": null,
+        "offline_mode": false
+    }
+}
