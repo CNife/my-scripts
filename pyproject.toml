@@ -16,7 +16,10 @@
     "pillow>=10.0.0",
     "pillow-heif>=0.13.0",
     "tushare>=1.4.24",
-  ]
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
+    "dotenv>=0.9.9",
+]
 
 [tool.uv]
   package = true
@@ -36,7 +39,15 @@
     "ipython",
     "pre-commit",
     "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "pytest-timeout>=2.4.0",
 ]
+
+[tool.pytest.ini_options]
+  timeout = 30
+  markers = [
+    "network: marks tests as requiring network access (deselect with '-m \"not network\"')",
+  ]
 
 [tool.ruff]
   target-version = "py314"

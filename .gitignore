@@ -19,3 +19,6 @@ wheels/
 
 # Chromium
 browser_profiles/
+
+# Gold analysis output
+gold_analysis/output/
