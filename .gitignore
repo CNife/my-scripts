@@ -22,3 +22,7 @@ browser_profiles/
 
 # Gold analysis output
 gold_analysis/output/
+
+# Cigar butt screener output
+cigar_butt_screener/output/
+output/
