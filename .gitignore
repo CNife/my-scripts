@@ -26,3 +26,8 @@ gold_analysis/output/
 # Cigar butt screener output
 cigar_butt_screener/output/
 output/
+
+# Cache directories
+.ruff_cache/
+.pytest_cache/
+**/__pycache__/
