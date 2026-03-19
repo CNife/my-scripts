@@ -1,0 +1,30 @@
+{
+  "skill_name": "check-opencode-updates",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "检查 opencode 版本",
+      "expected_output": "执行版本检查脚本，输出 opencode 和 oh-my-openagent 的版本状态"
+    },
+    {
+      "id": 2,
+      "prompt": "omo 有更新吗",
+      "expected_output": "执行版本检查脚本，报告 oh-my-openagent 是否有更新，如有更新则展示 release 说明"
+    },
+    {
+      "id": 3,
+      "prompt": "检查更新",
+      "expected_output": "执行版本检查脚本，检查 opencode 和 oh-my-openagent 的版本状态"
+    },
+    {
+      "id": 4,
+      "prompt": "看看 release notes",
+      "expected_output": "执行版本检查脚本，如有更新则展示 release 说明"
+    },
+    {
+      "id": 5,
+      "prompt": "更新 opencode",
+      "expected_output": "不应触发此 skill，用户要求的是执行更新操作而非检查版本"
+    }
+  ]
+}
