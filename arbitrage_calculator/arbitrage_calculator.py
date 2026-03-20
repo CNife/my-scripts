@@ -1,5 +1,4 @@
 import os
-from datetime import datetime, timedelta
 
 import tushare as ts
 
@@ -13,8 +12,8 @@ STOCK_CODES = {
 
 def get_latest_prices():
     """
-    通过 tushare 获取最新股价
-    返回: dict {股票名称: 最新收盘价} 或 None（获取失败时）
+    通过 tushare 获取实时股价
+    返回: dict {股票名称: 最新价} 或 None（获取失败时）
     """
     token = os.getenv("TUSHARE_TOKEN") or ts.get_token()
     if not token:
@@ -23,19 +22,15 @@ def get_latest_prices():
 
     try:
         pro = ts.pro_api(token)
-        # 获取最近3个交易日的数据，取最新一天
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
-
+        # 使用 rt_k 接口获取实时行情
         codes = list(STOCK_CODES.values())
-        df = pro.daily(ts_code=",".join(codes), start_date=start_date, end_date=end_date)
+        df = pro.rt_k(ts_code=",".join(codes))
 
         if df.empty:
             print("⚠️ 未获取到股价数据，将使用手动输入模式")
             return None
 
-        # 按交易日期降序排列，取每只股票最新一天的数据
-        df = df.sort_values("trade_date", ascending=False)
+        # rt_k 返回的 close 字段是最新价
         latest_prices = {}
         for name, code in STOCK_CODES.items():
             stock_df = df[df["ts_code"] == code]
