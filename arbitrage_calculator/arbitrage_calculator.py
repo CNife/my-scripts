@@ -1,8 +1,78 @@
-def calculate_arbitrage():
+import os
+from datetime import datetime, timedelta
+
+import tushare as ts
+
+# 股票代码映射
+STOCK_CODES = {
+    "中金公司": "601995.SH",
+    "东兴证券": "601198.SH",
+    "信达证券": "601059.SH",
+}
+
+
+def get_latest_prices():
+    """
+    通过 tushare 获取最新股价
+    返回: dict {股票名称: 最新收盘价} 或 None（获取失败时）
+    """
+    token = os.getenv("TUSHARE_TOKEN") or ts.get_token()
+    if not token:
+        print("⚠️ 未找到 TUSHARE_TOKEN 环境变量，将使用手动输入模式")
+        return None
+
+    try:
+        pro = ts.pro_api(token)
+        # 获取最近3个交易日的数据，取最新一天
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
+
+        codes = list(STOCK_CODES.values())
+        df = pro.daily(ts_code=",".join(codes), start_date=start_date, end_date=end_date)
+
+        if df.empty:
+            print("⚠️ 未获取到股价数据，将使用手动输入模式")
+            return None
+
+        # 按交易日期降序排列，取每只股票最新一天的数据
+        df = df.sort_values("trade_date", ascending=False)
+        latest_prices = {}
+        for name, code in STOCK_CODES.items():
+            stock_df = df[df["ts_code"] == code]
+            if not stock_df.empty:
+                latest_prices[name] = stock_df.iloc[0]["close"]
+            else:
+                print(f"⚠️ 未找到 {name}({code}) 的股价数据")
+
+        return latest_prices if len(latest_prices) == len(STOCK_CODES) else None
+
+    except Exception as e:
+        print(f"⚠️ 获取股价失败：{e}，将使用手动输入模式")
+        return None
+
+
+def input_prices_manually():
+    """
+    手动输入股价
+    返回: dict {股票名称: 股价} 或 None（输入错误时）
+    """
+    try:
+        prices = {
+            "中金公司": float(input("请输入中金公司当前股价（元）：")),
+            "东兴证券": float(input("请输入东兴证券当前股价（元）：")),
+            "信达证券": float(input("请输入信达证券当前股价（元）：")),
+        }
+        return prices
+    except ValueError:
+        print("❌ 输入错误！请输入数字格式的股价（例如：34.20）")
+        return None
+
+
+def calculate_arbitrage(prices: dict):
     """
     计算中金换股吸收合并东兴/信达的套利空间
-    输入：中金股价、东兴股价、信达股价
-    输出：正向换股套利收益、现金选择权套利收益
+    输入: dict {股票名称: 股价}
+    输出: 打印套利计算结果
     """
     # 固定参数（换股比例、现金选择权价格，无需修改）
     params = {
@@ -10,14 +80,9 @@ def calculate_arbitrage():
         "信达证券": {"换股比例": 0.5188, "现金选择权价格": 17.79},
     }
 
-    # 输入股价（做异常处理，防止输入非数字）
-    try:
-        cns_price = float(input("请输入中金公司当前股价（元）："))
-        dx_price = float(input("请输入东兴证券当前股价（元）："))
-        xd_price = float(input("请输入信达证券当前股价（元）："))
-    except ValueError:
-        print("❌ 输入错误！请输入数字格式的股价（例如：34.20）")
-        return
+    cns_price = prices["中金公司"]
+    dx_price = prices["东兴证券"]
+    xd_price = prices["信达证券"]
 
     # 计算套利空间
     print("\n===== 套利空间计算结果 =====")
@@ -52,6 +117,29 @@ def calculate_arbitrage():
     print("3. 优先选择正向换股套利（收益更高），仅当正向套利为负时考虑现金选择权。")
 
 
-# 执行函数
+def main():
+    """
+    主函数：自动获取股价并计算套利空间
+    """
+    print("===== 中金换股套利计算器 =====")
+
+    # 尝试自动获取股价
+    print("\n正在获取最新股价...")
+    prices = get_latest_prices()
+
+    if prices:
+        print("✅ 股价获取成功：")
+        for name, price in prices.items():
+            print(f"  {name}: {price:.2f} 元")
+    else:
+        print("\n请手动输入股价：")
+        prices = input_prices_manually()
+        if not prices:
+            return
+
+    # 计算套利空间
+    calculate_arbitrage(prices)
+
+
 if __name__ == "__main__":
-    calculate_arbitrage()
+    main()
