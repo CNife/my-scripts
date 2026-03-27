@@ -24,6 +24,7 @@
 | 风险平价 → 参考 `risk_parity_a_share/AGENTS.md`
 | 图像整理 → 参考 `organize_onedrive_album/AGENTS.md`
 | 套利计算 → 参考 `arbitrage_calculator/AGENTS.md`
+| A50 估值 → 参考 `a50_valuation/AGENTS.md`
 
 ## 文档
 - 项目结构、代码地图、项目特点 → 参考 `docs/AGENTS.md`
