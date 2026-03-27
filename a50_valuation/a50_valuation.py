@@ -1,11 +1,13 @@
-"""中证A50指数成分股PE/PB分位点及股息率计算。
+"""中证A50指数成分股 EP/BP 分位点及股息率计算。
 
-以中证A50 (930050.CSI) 成分股为股票池，使用周频 daily_basic 数据计算 PE/PB 分位点，
-使用 income 和 dividend 接口计算股息率（3年平均股利支付率 / PE_TTM），
-按 PE 分位点从低到高排列，输出为 Markdown 文件。
+以中证A50 (930050.CSI) 成分股为股票池，使用周频数据计算 EP/BP 分位点：
+- EP = EPS / 收盘价（每股收益/股价）
+- BP = BVPS / 收盘价（每股净资产/股价）
+可正确处理盈利为负的企业。
 
-数据获取策略：按周频 trade_date 拉全市场 daily_basic，本地过滤成分股。
-每次 API 调用拉一个交易日的全市场数据（约5000+行），10年周频约520次调用。
+数据获取策略：
+- 价格数据：按周频 trade_date 拉全市场 daily 收盘价，本地过滤成分股
+- 财务数据：从 fina_indicator 获取 EPS 和 BVPS，按 ann_date 前向填充到周频
 """
 
 import time
@@ -27,14 +29,12 @@ def get_pro():
 
 
 def get_latest_trade_date(pro) -> str:
-    """获取最近的交易日。"""
     today = datetime.now().strftime("%Y%m%d")
     df = pro.trade_cal(exchange="SSE", is_open=1, start_date="20260101", end_date=today)
     return df["cal_date"].max()
 
 
 def get_index_constituents(pro, trade_date: str) -> list[str]:
-    """获取中证A50最新成分股代码列表。"""
     df = pro.index_weight(index_code=INDEX_CODE, start_date=trade_date, end_date=trade_date)
     if df.empty:
         df = pro.index_weight(index_code=INDEX_CODE, end_date=trade_date)
@@ -46,13 +46,11 @@ def get_index_constituents(pro, trade_date: str) -> list[str]:
 
 
 def get_stock_names(pro, ts_codes: list[str]) -> dict[str, str]:
-    """获取股票名称映射。"""
     df = pro.stock_basic(fields="ts_code,name")
     return dict(zip(df["ts_code"], df["name"], strict=True))
 
 
 def get_weekly_trade_dates(pro, end_date: str, lookback_years: int) -> list[str]:
-    """获取回溯期内的周频交易日（每周最后一个交易日）。"""
     start_date = (
         datetime.strptime(end_date, "%Y%m%d") - timedelta(days=365 * lookback_years)
     ).strftime("%Y%m%d")
@@ -71,18 +69,14 @@ def get_weekly_trade_dates(pro, end_date: str, lookback_years: int) -> list[str]
     return result
 
 
-def fetch_weekly_daily_basic(pro, ts_codes: list[str], weekly_dates: list[str]) -> pd.DataFrame:
-    """按周频交易日拉全市场 daily_basic，过滤成分股。
-
-    每次调用拉一个 trade_date 的全市场数据，在本地过滤目标股票。
-    """
+def fetch_weekly_prices(pro, ts_codes: list[str], weekly_dates: list[str]) -> pd.DataFrame:
     ts_code_set = set(ts_codes)
     all_records = []
 
-    for trade_date in tqdm(weekly_dates, desc="拉取周频数据"):
+    for trade_date in tqdm(weekly_dates, desc="拉取周频价格"):
         for attempt in range(3):
             try:
-                df = pro.daily_basic(trade_date=trade_date, fields="ts_code,trade_date,pe_ttm,pb")
+                df = pro.daily(trade_date=trade_date, fields="ts_code,trade_date,close")
                 if df is not None and not df.empty:
                     filtered = df[df["ts_code"].isin(ts_code_set)]
                     if not filtered.empty:
@@ -94,13 +88,82 @@ def fetch_weekly_daily_basic(pro, ts_codes: list[str], weekly_dates: list[str]) 
                 continue
 
     if not all_records:
-        return pd.DataFrame(columns=["ts_code", "trade_date", "pe_ttm", "pb"])
+        return pd.DataFrame(columns=["ts_code", "trade_date", "close"])
 
     result = pd.concat(all_records, ignore_index=True)
     result = result.drop_duplicates(subset=["ts_code", "trade_date"]).sort_values(
         ["ts_code", "trade_date"]
     )
     return result
+
+
+def fetch_financial_data(pro, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    for attempt in range(3):
+        try:
+            df = pro.fina_indicator(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                fields="ts_code,ann_date,end_date,eps,bps",
+            )
+            if df is not None and not df.empty:
+                df = df.sort_values("ann_date")
+                return df
+            return pd.DataFrame(columns=["ts_code", "ann_date", "end_date", "eps", "bps"])
+        except Exception:
+            if attempt < 2:
+                time.sleep(0.5)
+            continue
+    return pd.DataFrame(columns=["ts_code", "ann_date", "end_date", "eps", "bps"])
+
+
+def align_financial_to_weekly(financial_df: pd.DataFrame, weekly_dates: list[str]) -> pd.DataFrame:
+    """将季度财务数据前向填充到周频交易日。
+
+    按 ann_date（公告日）生效：在公告日当天及之后使用新数据，
+    在公告日之前使用上一期数据。
+    """
+    if financial_df.empty:
+        return pd.DataFrame(
+            {
+                "trade_date": weekly_dates,
+                "eps": [float("nan")] * len(weekly_dates),
+                "bps": [float("nan")] * len(weekly_dates),
+            }
+        )
+
+    weekly_dates_dt = pd.to_datetime(weekly_dates, format="%Y%m%d")
+    financial_df["ann_date_dt"] = pd.to_datetime(financial_df["ann_date"], format="%Y%m%d")
+
+    result = []
+    for trade_date in weekly_dates_dt:
+        available = financial_df[financial_df["ann_date_dt"] <= trade_date]
+        if available.empty:
+            result.append(
+                {
+                    "trade_date": trade_date.strftime("%Y%m%d"),
+                    "eps": float("nan"),
+                    "bps": float("nan"),
+                }
+            )
+        else:
+            latest = available.iloc[-1]
+            result.append(
+                {
+                    "trade_date": trade_date.strftime("%Y%m%d"),
+                    "eps": latest["eps"],
+                    "bps": latest["bps"],
+                }
+            )
+
+    return pd.DataFrame(result)
+
+
+def calc_ep_bp(prices_df: pd.DataFrame, financial_aligned_df: pd.DataFrame) -> pd.DataFrame:
+    merged = pd.merge(prices_df, financial_aligned_df, on="trade_date", how="inner")
+    merged["ep"] = merged["eps"] / merged["close"]
+    merged["bp"] = merged["bps"] / merged["close"]
+    return merged[["ts_code", "trade_date", "ep", "bp"]]
 
 
 def fetch_dividend_data(pro, ts_code: str) -> pd.DataFrame:
@@ -138,25 +201,23 @@ def fetch_eps_data(pro, ts_code: str) -> pd.DataFrame:
     return pd.DataFrame(columns=["ts_code", "end_date", "basic_eps"])
 
 
-def calc_dividend_yield(pro, ts_code: str, pe_ttm: float) -> float:
-    """计算股息率 = 3年平均股利支付率 / PE_TTM。
+def calc_dividend_yield(pro, ts_code: str, ep: float) -> float:
+    """计算股息率 = 3年平均股利支付率 × EP × 100。
 
-    股利支付率 = 每股分红 / 每股收益，取最近3个完整财年的算术平均。
-    EPS为负的年份跳过。
+    无分红或盈利为负的年份，股利支付率设为 0。
     """
-    if pd.isna(pe_ttm) or pe_ttm <= 0:
+    if pd.isna(ep) or ep <= 0:
         return float("nan")
 
     dividends = fetch_dividend_data(pro, ts_code)
     eps_data = fetch_eps_data(pro, ts_code)
 
-    if dividends.empty or eps_data.empty:
+    if eps_data.empty:
         return float("nan")
 
     div_annual = dividends.groupby("end_date", as_index=False)["cash_div"].sum()
-    div_annual = div_annual[div_annual["cash_div"] > 0]
 
-    merged = pd.merge(div_annual, eps_data, on="end_date", how="inner")
+    merged = pd.merge(div_annual, eps_data, on="end_date", how="outer")
     merged = merged.sort_values("end_date", ascending=False).head(PAYOUT_LOOKBACK_YEARS)
 
     if merged.empty:
@@ -164,34 +225,34 @@ def calc_dividend_yield(pro, ts_code: str, pe_ttm: float) -> float:
 
     payout_ratios = []
     for _, row in merged.iterrows():
-        dps = row["cash_div"]
-        eps = row["basic_eps"]
-        if pd.isna(dps) or pd.isna(eps) or eps <= 0:
-            continue
-        payout_ratios.append(dps / eps)
-
-    if not payout_ratios:
-        return float("nan")
+        dps = row.get("cash_div", 0) or 0
+        eps = row.get("basic_eps", None)
+        if pd.isna(eps) or eps is None or eps <= 0:
+            payout_ratios.append(0.0)
+        else:
+            payout_ratios.append(dps / eps)
 
     avg_payout_ratio = sum(payout_ratios) / len(payout_ratios)
-    return avg_payout_ratio / pe_ttm * 100  # 转为百分比
+    return avg_payout_ratio * ep * 100
 
 
 def calc_percentile(series: pd.Series, current_value: float) -> float:
-    """计算分位点：历史数据中 <= 当前值的比例。"""
+    """计算分位点：P(历史 >= 当前值)。
+
+    用于 EP/BP，值越高越便宜，低分位点 = 被低估。
+    """
     if pd.isna(current_value) or len(series) == 0:
         return float("nan")
     historical = series.dropna()
     if len(historical) == 0:
         return float("nan")
-    return (historical <= current_value).sum() / len(historical) * 100
+    return (historical >= current_value).sum() / len(historical) * 100
 
 
 def build_markdown_table(result_df: pd.DataFrame) -> str:
-    """手动构建 Markdown 表格，避免依赖 tabulate。"""
     lines = []
-    cols = ["ts_code", "name", "pe_ttm", "pe_percentile", "pb", "pb_percentile", "dividend_yield"]
-    headers = ["排名", "代码", "名称", "PE(TTM)", "PE分位点(%)", "PB", "PB分位点(%)", "股息率(%)"]
+    cols = ["ts_code", "name", "ep", "ep_percentile", "bp", "bp_percentile", "dividend_yield"]
+    headers = ["排名", "代码", "名称", "EP", "EP分位点(%)", "BP", "BP分位点(%)", "股息率(%)"]
     aligns = ["---:"] + [":---"] * 2 + ["---:"] * 5
 
     lines.append("| " + " | ".join(headers) + " |")
@@ -204,7 +265,7 @@ def build_markdown_table(result_df: pd.DataFrame) -> str:
             if pd.isna(v):
                 vals.append("-")
             elif isinstance(v, float):
-                vals.append(f"{v:.2f}" if col in ("pe_ttm", "pb", "dividend_yield") else f"{v:.1f}")
+                vals.append(f"{v:.4f}" if col in ("ep", "bp") else f"{v:.2f}")
             else:
                 vals.append(str(v))
         lines.append("| " + " | ".join(vals) + " |")
@@ -215,75 +276,77 @@ def build_markdown_table(result_df: pd.DataFrame) -> str:
 def main():
     pro = get_pro()
 
-    # 1. 获取最新交易日
     latest_date = get_latest_trade_date(pro)
     print(f"最新交易日: {latest_date}")
 
-    # 2. 获取成分股
     ts_codes = get_index_constituents(pro, latest_date)
 
-    # 3. 获取股票名称
     names = get_stock_names(pro, ts_codes)
 
-    # 4. 获取周频交易日列表
     weekly_dates = get_weekly_trade_dates(pro, latest_date, LOOKBACK_YEARS)
+    start_date = weekly_dates[0]
 
-    # 5. 批量拉取周频 daily_basic 数据
-    print("\n开始拉取数据...")
-    all_data = fetch_weekly_daily_basic(pro, ts_codes, weekly_dates)
-    print(f"总数据行数: {len(all_data)}")
+    print("\n开始拉取价格数据...")
+    prices_data = fetch_weekly_prices(pro, ts_codes, weekly_dates)
+    print(f"价格数据行数: {len(prices_data)}")
 
-    if all_data.empty:
-        print("无数据，退出")
+    if prices_data.empty:
+        print("无价格数据，退出")
         return
 
-    # 6. 逐股计算分位点和股息率
-    print("\n开始计算分位点和股息率...")
+    print("\n开始拉取财务数据并计算 EP/BP...")
     results = []
     for ts_code in tqdm(ts_codes, desc="逐股计算"):
-        stock_data = all_data[all_data["ts_code"] == ts_code].sort_values("trade_date")
+        stock_prices = prices_data[prices_data["ts_code"] == ts_code].sort_values("trade_date")
 
-        if stock_data.empty:
-            print(f"  {ts_code} ({names.get(ts_code, '')}) 无数据")
+        if stock_prices.empty:
+            print(f"  {ts_code} ({names.get(ts_code, '')}) 无价格数据")
             continue
 
-        current_pe = stock_data.iloc[-1]["pe_ttm"]
-        current_pb = stock_data.iloc[-1]["pb"]
+        financial_df = fetch_financial_data(pro, ts_code, start_date, latest_date)
+        financial_aligned = align_financial_to_weekly(financial_df, weekly_dates)
 
-        pe_pct = calc_percentile(stock_data["pe_ttm"], current_pe)
-        pb_pct = calc_percentile(stock_data["pb"], current_pb)
-        div_yield = calc_dividend_yield(pro, ts_code, current_pe)
+        ep_bp_df = calc_ep_bp(stock_prices, financial_aligned)
+
+        if ep_bp_df.empty:
+            print(f"  {ts_code} ({names.get(ts_code, '')}) 无 EP/BP 数据")
+            continue
+
+        current_ep = ep_bp_df.iloc[-1]["ep"]
+        current_bp = ep_bp_df.iloc[-1]["bp"]
+
+        ep_pct = calc_percentile(ep_bp_df["ep"], current_ep)
+        bp_pct = calc_percentile(ep_bp_df["bp"], current_bp)
+        div_yield = calc_dividend_yield(pro, ts_code, current_ep)
 
         results.append(
             {
                 "ts_code": ts_code,
                 "name": names.get(ts_code, ""),
-                "pe_ttm": round(current_pe, 2) if pd.notna(current_pe) else float("nan"),
-                "pb": round(current_pb, 2) if pd.notna(current_pb) else float("nan"),
-                "pe_percentile": round(pe_pct, 1) if pd.notna(pe_pct) else float("nan"),
-                "pb_percentile": round(pb_pct, 1) if pd.notna(pb_pct) else float("nan"),
+                "ep": round(current_ep, 4) if pd.notna(current_ep) else float("nan"),
+                "bp": round(current_bp, 4) if pd.notna(current_bp) else float("nan"),
+                "ep_percentile": round(ep_pct, 1) if pd.notna(ep_pct) else float("nan"),
+                "bp_percentile": round(bp_pct, 1) if pd.notna(bp_pct) else float("nan"),
                 "dividend_yield": round(div_yield, 2) if pd.notna(div_yield) else float("nan"),
-                "data_points": len(stock_data),
+                "data_points": len(ep_bp_df),
             }
         )
 
-    # 7. 按 PE 分位点排序
     result_df = pd.DataFrame(results)
-    result_df = result_df.sort_values("pe_percentile", na_position="last").reset_index(drop=True)
+    result_df = result_df.sort_values("ep_percentile", na_position="last").reset_index(drop=True)
 
-    # 8. 输出 Markdown
     output_path = OUTPUT_DIR / "a50_valuation.md"
-    start_date = weekly_dates[0]
     with output_path.open("w", encoding="utf-8") as f:
-        f.write("# 中证A50指数成分股 PE/PB 分位点及股息率\n\n")
+        f.write("# 中证A50指数成分股 EP/BP 分位点及股息率\n\n")
         f.write(f"- **指数代码**: {INDEX_CODE}\n")
         f.write(f"- **成分股数量**: {len(ts_codes)}\n")
         f.write("- **数据频率**: 周频（每周最后一个交易日）\n")
         f.write(f"- **回溯区间**: {start_date} ~ {latest_date} ({LOOKBACK_YEARS}年)\n")
-        f.write("- **分位点定义**: 历史周频数据中 ≤ 当前值的比例\n")
+        f.write("- **计算方式**: EP = EPS/收盘价, BP = BVPS/收盘价\n")
+        f.write("- **分位点定义**: P(历史 >= 当前值)，低分位点 = 被低估\n")
         f.write(
-            f"- **股息率**: {PAYOUT_LOOKBACK_YEARS}年平均股利支付率 / PE_TTM "
-            f"（股利支付率=每股分红/每股收益）\n"
+            f"- **股息率**: {PAYOUT_LOOKBACK_YEARS}年平均股利支付率 × EP × 100 "
+            f"（无分红/亏损年份支付率=0）\n"
         )
         f.write(f"- **生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
         f.write(build_markdown_table(result_df))
@@ -291,11 +354,11 @@ def main():
 
     print(f"\n结果已输出到: {output_path}")
     print(f"共 {len(result_df)} 只股票")
-    print("\nPE分位点最低的5只:")
+    print("\nEP分位点最低的5只:")
     for _, row in result_df.head(5).iterrows():
         print(
             f"  {row['name']}({row['ts_code']}): "
-            f"PE={row['pe_ttm']}, 分位点={row['pe_percentile']}%, "
+            f"EP={row['ep']}, EP分位点={row['ep_percentile']}%, "
             f"股息率={row['dividend_yield']}%"
         )
 
