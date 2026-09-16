@@ -1,0 +1,63 @@
+# nmem_gateway
+
+**类型**: 单文件 Python 脚本（PEP 723，用 uv 管理依赖：`loguru`）
+**用途**: 夹在 Nowledge Mem 与上游 LLM 端点之间的 OpenAI 兼容中转网关，**单 lane**（只服务 nmem 的 `background` 用途）。
+
+## 为什么存在
+
+nmem 自己拥有出站请求契约，用户无法干预：provider 的 `extra_params` 不参与请求构造，`openai_compatible` 类型不能发自定义请求头（维护者原文：`There is no custom-header support on LLM providers today.`，根因是 `llm_factory` 的 reqwest client 没有 `default_headers`）。于是把请求接管到自己的脚本里，换取三件事：
+
+1. 按配置决定**是否思考 / 思考强度**（上游原生 `thinking`、`reasoning_effort`）；
+2. 注入上游要求的自定义头（如 OpenCode Go 的 `x-opencode-session`）；
+3. 完整记录出入站请求体（此前完全不可观测）。
+
+## 请求流
+
+```
+nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端点
+```
+
+每个请求固定五步，无分支：读配置 → 覆盖 `model`/`max_tokens`/`thinking`/`reasoning_effort` → 转发 → 剥离响应里的推理内容 → 记一行 JSONL。
+
+`GET .../models` 原样代理给上游（nmem 凭据就绪后会查模型列表）；`GET .../health` 返回 `{"status":"ok"}`。
+
+## 配置
+
+`config.json`（**不入库、权限 600**），字段见 `config.example.json`：
+
+| 键 | 作用 |
+| --- | --- |
+| `listen` | 监听地址，默认 `127.0.0.1:8899`（只对本机开放，不做鉴权） |
+| `upstream_base_url` | 上游 base（脚本会拼 `/chat/completions`、`/models`） |
+| `upstream_api_key` | 上游密钥 |
+| `upstream_headers` | 额外请求头（如上游要求的会话头） |
+| `upstream_model` | 上游真实模型名；nmem 条目里填什么都无所谓，换模型只改这里 |
+| `max_tokens` | 覆盖 nmem 传来的输出预算（给思考留出内容预算）；`null` = 不动 |
+| `thinking` | 原样塞进请求体的 `thinking` 对象；`null` = 删除该字段 |
+| `reasoning_effort` | 覆盖思考强度（上游支持时，如 `low`/`high`/`max`）；`null` = 不动 |
+| `strip_reasoning` | 是否剥离响应中的 `reasoning_content`/`reasoning`/`reasoning_details` |
+| `timeout_seconds` | 上游超时 |
+| `log` | `path` / `max_bytes` / `backups`（loguru 按大小轮转） |
+
+配置**每请求重读**：改完即生效，不用重启；写坏/写一半时沿用上次成功值并告警。
+
+### 思考开关的取值（DeepSeek 官方 schema，上游若为 Go/DeepSeek V4 即适用）
+
+- 关：`"thinking": {"type": "disabled"}`（`reasoning_effort: "none"` 等效）
+- 开：`"thinking": {"type": "enabled"}` + 可选 `"reasoning_effort": "low"|"high"|"max"`（默认 `high`；没有 `budget_tokens` 这类字段）
+- 思考开启时上游默认 `max_tokens` 是 64K，所以此时把 `max_tokens` 一起调大才不至于让思考吃光可见输出
+
+## 运行与部署
+
+- 本机冒烟：`GW_CONFIG=/tmp/gw.json uv run --no-project gateway.py`
+- 服务端：脚本与配置放 `~/.local/share/nmem-gw/`，unit 放 `~/.config/systemd/user/nmem-gw.service`，然后 `systemctl --user enable --now nmem-gw`。登出后仍运行需要一次性 `loginctl enable-linger <user>`。
+- 健康检查：`curl 127.0.0.1:8899/health`。
+- **上游 UA 必须显式设置**：OpenCode Go 在 Cloudflare 后面，urllib 默认的 `Python-urllib/3.x` 会被挡成 `403 error code: 1010`；`upstream_headers` 里必须带 `User-Agent`（`nmem-gw/1.0` 就够）。
+- 一次性 `loginctl enable-linger <user>` 需要 sudo（不带会报 `Could not enable linger: Access denied`）。
+
+## 纪律
+
+- **禁止**读取、打印、复制 `config.json`（含上游密钥）；密钥由用户自己填。
+- 日志 `requests.jsonl` 含记忆正文，属敏感资产：只在服务端本地、不备份、不入库。
+- nmem 侧配套：`openai_compatible:<id>` 条目 + `background` purpose 指向它。单 lane 是刻意设计——`ai_now` 的 AgentHarness 在思考模型上另有已知问题，不在此脚本职责内。
+- 上游带 `tools` 且开启思考时，DeepSeek 要求把历史轮次的 `reasoning_content` 原样传回，否则 400；本网关默认剥离响应里的推理内容，因此**不要**用它跑 tool-loop（这是它只做 background lane 的原因之一）。

@@ -1,0 +1,16 @@
+{
+  "listen": "127.0.0.1:8899",
+  "upstream_base_url": "https://opencode.ai/zen/go/v1",
+  "upstream_api_key": "REPLACE-upstream-api-key",
+  "upstream_headers": {
+    "User-Agent": "nmem-gw/1.0",
+    "x-opencode-session": "REPLACE-stable-session-id"
+  },
+  "upstream_model": "REPLACE-real-model-id-from-GET-models",
+  "max_tokens": 16384,
+  "thinking": { "type": "disabled" },
+  "reasoning_effort": null,
+  "strip_reasoning": true,
+  "timeout_seconds": 120,
+  "log": { "path": "requests.jsonl", "max_bytes": 10485760, "backups": 5 }
+}
