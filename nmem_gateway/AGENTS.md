@@ -61,3 +61,10 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 - 日志 `requests.jsonl` 含记忆正文，属敏感资产：只在服务端本地、不备份、不入库。
 - nmem 侧配套：`openai_compatible:<id>` 条目 + `background` purpose 指向它。单 lane 是刻意设计——`ai_now` 的 AgentHarness 在思考模型上另有已知问题，不在此脚本职责内。
 - 上游带 `tools` 且开启思考时，DeepSeek 要求把历史轮次的 `reasoning_content` 原样传回，否则 400；本网关默认剥离响应里的推理内容，因此**不要**用它跑 tool-loop（这是它只做 background lane 的原因之一）。
+
+## 验证与排障（踩过的坑）
+
+- `nmem config provider test` 由**服务端**发起探测请求，且测的是 **active provider**：想用它做端到端验证，先 `nmem config provider purpose set background --provider openai_compatible:<id> --model god`，或临时 `activate`。
+- CLI 上的 `--api-url` 覆盖的是 **CLI 要连的 nmem 服务器地址**，不是 provider 的 base URL。把它指向本机网关只会得到 `Connection refused`（请求根本没到服务端）。
+- `nmem config provider set <新 id>` 会把该条目**设为 active 并改写 `default` purpose**（background/ai_now 靠继承跟着走）。只想加条目、不想动路由时，加完立刻 `nmem config provider activate <原 provider>` 还原。
+- `provider test` 打的是 `<base>/remote-llm/test`，**不是** chat completions；想验证真实链路，用后台任务（`POST /agent/trigger/wm-refresh`）而不是 test。
