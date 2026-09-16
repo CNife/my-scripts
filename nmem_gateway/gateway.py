@@ -97,6 +97,7 @@ def rewrite(body: bytes, cfg: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
         notes["reasoning_effort"] = cfg["reasoning_effort"]
     notes["model_out"] = payload.get("model")
     notes["max_tokens_out"] = payload.get("max_tokens")
+    notes["stream_in"] = bool(payload.get("stream"))
     notes["stream"] = bool(payload.get("stream"))
     return json.dumps(payload, ensure_ascii=False).encode(), notes
 
@@ -118,10 +119,14 @@ def strip_reasoning(raw: bytes) -> tuple[bytes, list[str]]:
     return json.dumps(payload, ensure_ascii=False).encode(), hit
 
 
-def forward(
+def open_upstream(
     method: str, path: str, body: bytes | None, cfg: dict[str, Any]
-) -> tuple[int, bytes, str]:
-    """把请求打给上游，原样带回状态码、响应体与 content-type（错误也照带）。"""
+) -> tuple[Any | None, int, bytes, str]:
+    """打开上游连接。
+
+    成功：``(响应对象, 状态码, b"", content-type)``，由调用方负责读取与关闭。
+    失败：``(None, 状态码, 错误体, content-type)``。
+    """
     url = str(cfg["upstream_base_url"]).rstrip("/") + path
     headers = {"Content-Type": "application/json"}
     headers.update(cfg.get("upstream_headers") or {})
@@ -131,19 +136,14 @@ def forward(
         scheme = urllib.parse.urlsplit(url).scheme
         if scheme not in ("http", "https"):
             raise ValueError(f"unsupported upstream scheme: {scheme}")
-        with urllib.request.urlopen(  # noqa: S310
+        response = urllib.request.urlopen(  # noqa: S310
             request, timeout=cfg.get("timeout_seconds", 120)
-        ) as response:
-            return (
-                response.status,
-                response.read(),
-                response.headers.get("Content-Type") or "application/json",
-            )
+        )
     except urllib.error.HTTPError as exc:
         content_type = (
             exc.headers.get("Content-Type") if exc.headers else None
         ) or "application/json"
-        return exc.code, exc.read(), content_type
+        return None, exc.code, exc.read(), content_type
     except Exception as exc:
         logger.error("上游请求失败：{}", exc)
         failure = {
@@ -152,7 +152,24 @@ def forward(
                 "type": "gateway_error",
             }
         }
-        return 502, json.dumps(failure, ensure_ascii=False).encode(), "application/json"
+        return None, 502, json.dumps(failure, ensure_ascii=False).encode(), "application/json"
+    return (
+        response,
+        response.status,
+        b"",
+        response.headers.get("Content-Type") or "application/json",
+    )
+
+
+def forward(
+    method: str, path: str, body: bytes | None, cfg: dict[str, Any]
+) -> tuple[int, bytes, str]:
+    """非流式：把上游响应读全后返回（错误也照带）。"""
+    response, status, error_body, content_type = open_upstream(method, path, body, cfg)
+    if response is None:
+        return status, error_body, content_type
+    with response:
+        return status, response.read(), content_type
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -184,6 +201,79 @@ class Handler(BaseHTTPRequestHandler):
         }
         record.update(fields)
         logger.info(json.dumps(record, ensure_ascii=False))
+
+    def _write_chunk(self, data: bytes, *, last: bool = False) -> None:
+        if data:
+            self.wfile.write(f"{len(data):X}\r\n".encode() + data + b"\r\n")
+        if last:
+            self.wfile.write(b"0\r\n\r\n")
+
+    def _proxy_stream(
+        self, started: float, response: Any, notes: dict[str, Any], cfg: dict[str, Any]
+    ) -> None:
+        """把上游 SSE 逐行透传给 nmem，顺手剥掉思考增量，并把整段内容记进日志。"""
+        self.send_response(response.status)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        self.close_connection = True
+
+        hits: list[str] = []
+        text: list[str] = []
+        usage: Any = None
+        finish: Any = None
+        chunks = 0
+        strip = cfg.get("strip_reasoning", True)
+        try:
+            for raw in response:
+                out = raw
+                if raw.startswith(b"data: "):
+                    data = raw[6:].strip()
+                    if data and data != b"[DONE]":
+                        parsed = as_json(data)
+                        if isinstance(parsed, dict):
+                            if isinstance(parsed.get("usage"), dict):
+                                usage = parsed["usage"]
+                            for choice in parsed.get("choices") or []:
+                                if not isinstance(choice, dict):
+                                    continue
+                                if choice.get("finish_reason"):
+                                    finish = choice["finish_reason"]
+                                for holder in (choice.get("delta"), choice.get("message")):
+                                    if not isinstance(holder, dict):
+                                        continue
+                                    if isinstance(holder.get("content"), str):
+                                        text.append(holder["content"])
+                                    if strip:
+                                        for key in REASONING_KEYS:
+                                            if (
+                                                holder.pop(key, None) is not None
+                                                and key not in hits
+                                            ):
+                                                hits.append(key)
+                            out = (
+                                b"data: " + json.dumps(parsed, ensure_ascii=False).encode() + b"\n"
+                            )
+                self._write_chunk(out)
+                chunks += 1
+        except Exception as exc:
+            logger.error("流式转发中断：{}", exc)
+        finally:
+            response.close()
+            self._write_chunk(b"", last=True)
+
+        self._record(
+            started,
+            method="POST",
+            upstream_status=response.status,
+            chunks=chunks,
+            stripped=hits,
+            finish_reason=finish,
+            usage=usage,
+            content="".join(text),
+            **notes,
+        )
 
     def do_GET(self) -> None:
         if self.path.rstrip("/").endswith("/health"):
@@ -219,11 +309,22 @@ class Handler(BaseHTTPRequestHandler):
 
         rewritten, notes = rewrite(body, cfg)
         if notes.get("stream"):
-            self._send_error(
-                501,
-                "nmem-gw: streaming is not supported (background lane is expected to be non-streaming)",
+            # nmem 的后台 lane 会带 stream=true，且校验响应必须是 text/event-stream，
+            # 所以流式请求只能真流式转发（不能改写成一坨 JSON）
+            response, status, error_body, content_type = open_upstream(
+                "POST", UPSTREAM_PATH, rewritten, cfg
             )
-            self._record(started, method="POST", upstream_status=501, error="stream", **notes)
+            if response is None:
+                self._send(status, error_body, content_type)
+                self._record(
+                    started,
+                    method="POST",
+                    upstream_status=status,
+                    response=as_json(error_body),
+                    **notes,
+                )
+                return
+            self._proxy_stream(started, response, notes, cfg)
             return
 
         status, upstream_body, content_type = forward("POST", UPSTREAM_PATH, rewritten, cfg)

@@ -21,6 +21,13 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 
 `GET .../models` 原样代理给上游（nmem 凭据就绪后会查模型列表）；`GET .../health` 返回 `{"status":"ok"}`。
 
+请求有两种形态，网关都支持：
+
+- **流式**（后台 lane 会带 `stream: true` + `stream_options.include_usage`）：上游响应用真正的 SSE
+  （`text/event-stream` + chunked）逐行透传给 nmem，同时**剥掉 `delta.reasoning_content`**；
+  日志里记的是重组后的 `content` / `usage` / `chunks`。
+- **非流式**（工具调用类请求，如 `classify_memory_unit_type`）：读全后按 JSON 处理。
+
 ## 配置
 
 `config.json`（**不入库、权限 600**），字段见 `config.example.json`：
@@ -46,6 +53,15 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 - 关：`"thinking": {"type": "disabled"}`（`reasoning_effort: "none"` 等效）
 - 开：`"thinking": {"type": "enabled"}` + 可选 `"reasoning_effort": "low"|"high"|"max"`（默认 `high`；没有 `budget_tokens` 这类字段）
 - 思考开启时上游默认 `max_tokens` 是 64K，所以此时把 `max_tokens` 一起调大才不至于让思考吃光可见输出
+
+### 两条被实验证伪的做法（别再试）
+
+- **不要把流式请求改写成非流式**：上游会先校验 `stream_options should be set along with stream = true`（400）；
+  就算同时摘掉 `stream_options`，nmem 也会用 `Invalid content type was returned: "application/json"` 拒绝
+  —— 它要求响应必须是 `text/event-stream`。
+- **不要以为后台 lane 是非流式的**：实测 `thread_synced`、`memory_created_review` 等任务都带 `stream: true`，
+  只有工具调用类请求是非流式。
+
 
 ## 运行与部署
 
