@@ -85,16 +85,23 @@ def rewrite(body: bytes, cfg: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
         payload["model"] = cfg["upstream_model"]
     if cfg.get("max_tokens") is not None:
         payload["max_tokens"] = cfg["max_tokens"]
-    if "thinking" in cfg:
-        if cfg["thinking"] is None:
-            payload.pop("thinking", None)
-            notes["thinking"] = "removed"
-        else:
-            payload["thinking"] = cfg["thinking"]
-            notes["thinking"] = cfg["thinking"]
-    if cfg.get("reasoning_effort"):
-        payload["reasoning_effort"] = cfg["reasoning_effort"]
-        notes["reasoning_effort"] = cfg["reasoning_effort"]
+    if payload.get("tools"):
+        # tool-loop：上游开启思考时会要求把历史轮次的 reasoning_content 原样回传，
+        # 而本网关要剥掉响应里的推理内容，所以带 tools 的请求一律关思考，否则 400。
+        payload.pop("reasoning_effort", None)
+        payload["thinking"] = {"type": "disabled"}
+        notes["thinking"] = "disabled(tools)"
+    else:
+        if "thinking" in cfg:
+            if cfg["thinking"] is None:
+                payload.pop("thinking", None)
+                notes["thinking"] = "removed"
+            else:
+                payload["thinking"] = cfg["thinking"]
+                notes["thinking"] = cfg["thinking"]
+        if cfg.get("reasoning_effort"):
+            payload["reasoning_effort"] = cfg["reasoning_effort"]
+            notes["reasoning_effort"] = cfg["reasoning_effort"]
     notes["model_out"] = payload.get("model")
     notes["max_tokens_out"] = payload.get("max_tokens")
     notes["stream_in"] = bool(payload.get("stream"))

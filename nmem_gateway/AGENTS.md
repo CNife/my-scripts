@@ -1,7 +1,7 @@
 # nmem_gateway
 
 **类型**: 单文件 Python 脚本（PEP 723，用 uv 管理依赖：`loguru`）
-**用途**: 夹在 Nowledge Mem 与上游 LLM 端点之间的 OpenAI 兼容中转网关，**单 lane**（只服务 nmem 的 `background` 用途）。
+**用途**: 夹在 Nowledge Mem 与上游 LLM 端点之间的 OpenAI 兼容中转网关，承载 nmem 的**全部 chat lane**（`default` / `background` / `ai_now` / `ocr`）；只有 `embedding` 例外——上游没有 embeddings 端点，仍走本地模型。
 
 ## 为什么存在
 
@@ -14,10 +14,10 @@ nmem 自己拥有出站请求契约，用户无法干预：provider 的 `extra_p
 ## 请求流
 
 ```
-nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端点
+nmem(default/background/ai_now/ocr) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端点
 ```
 
-每个请求固定五步，无分支：读配置 → 覆盖 `model`/`max_tokens`/`thinking`/`reasoning_effort` → 转发 → 剥离响应里的推理内容 → 记一行 JSONL。
+每个请求固定五步：读配置 → 覆盖 `model`/`max_tokens`/`thinking`/`reasoning_effort` → 转发 → 剥离响应里的推理内容 → 记一行 JSONL。唯一的分支在思考开关上：**带 `tools` 的请求强制关思考**（见下）。
 
 `GET .../models` 原样代理给上游（nmem 凭据就绪后会查模型列表）；`GET .../health` 返回 `{"status":"ok"}`。
 
@@ -57,6 +57,7 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 - 关：`"thinking": {"type": "disabled"}`（`reasoning_effort: "none"` 等效）
 - 开：`"thinking": {"type": "enabled"}` + 可选 `"reasoning_effort": "low"|"high"|"max"`（默认 `high`；没有 `budget_tokens` 这类字段）
 - 思考开启时上游默认 `max_tokens` 是 64K，所以此时把 `max_tokens` 一起调大才不至于让思考吃光可见输出
+- **带 `tools` 的请求一律 `"thinking": {"type": "disabled"}`**，忽略配置里的 `thinking`/`reasoning_effort`：上游开启思考时要求把历史轮次的 `reasoning_content` 原样回传，而本网关要剥掉响应里的推理，不关思考就会 400。这条是网关能承载交互 lane（`ai_now` 的 AgentHarness、`nmem ask` 的工具链）的前提。
 
 ### 两条被实验证伪的做法（别再试）
 
@@ -77,13 +78,14 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 - 改完 `gateway.py` 要重装并重启：`scp gateway.py <server>:~/.local/share/nmem-gw/` + `systemctl --user restart nmem-gw`（会中断正在进行的流；配置 `config.json` 每请求重读，不用重启）。
 - **nmem 侧 provider 的 `timeout` 必须 ≥ 上游最慢请求**：`max_tokens` 抬到 16384 后单请求会跑到 55–62s，provider 里写死的 `timeout: 60.0` 会在到点时断开 SSE，nmem 侧表现为 `scheduler LLM generation timed out after 60.000s` + 任务 partial。该值在服务端 `~/.config/co.nowledge.mem.desktop/remote_llm.json` 的 `providers["openai_compatible:nmem-gw"].timeout`（现为 180.0）；CLI 的 `nmem config provider set` 没有 timeout 选项，只能改文件。
 - **目标运行时 3.14**：PEP 723 声明 `>=3.14`，uv 会自己下载并使用 3.14（系统自带的 3.13 只是 host，不参与运行）。部署后核对：`ls ~/.cache/uv/environments-v2/gateway-*/bin/python` 再 `-V`，应显示 3.14。仓库 ruff 目标就是 `py314`，3.14 原生语法（如 PEP 758 的无括号 `except A, B:`）照常用，别为迁就旧解释器改写法。
+- **路由现状**：nmem 侧只剩 `openai_compatible:nmem-gw` 一个 provider，`default`/`background`/`ai_now`/`ocr` 四个 purpose 全指向它（`embedding` 为 null = 本地模型）。`ocr` 与 `embedding` 用 CLI 的 `purpose set` 改不了（前者不在 CLI 的取值列表里），要直接改服务端 `remote_llm.json`。
 
 ## 纪律
 
 - **禁止**读取、打印、复制 `config.json`（含上游密钥）；密钥由用户自己填。
 - 日志 `requests.jsonl` 含记忆正文，属敏感资产：只在服务端本地、不备份、不入库。
-- nmem 侧配套：`openai_compatible:<id>` 条目 + `background` purpose 指向它。单 lane 是刻意设计——`ai_now` 的 AgentHarness 在思考模型上另有已知问题，不在此脚本职责内。
-- 上游带 `tools` 且开启思考时，DeepSeek 要求把历史轮次的 `reasoning_content` 原样传回，否则 400；本网关默认剥离响应里的推理内容，因此**不要**用它跑 tool-loop（这是它只做 background lane 的原因之一）。
+- nmem 侧配套：唯一 provider `openai_compatible:nmem-gw`（`api_base` 指本机 8899），四个 purpose 全指向它。
+- `ocr` lane 走网关是可行的：上游接受 data URL 图片，实测白底黑方块 PNG 能正确回答位置（当年直连的 gemma 视觉模型已删，OCR 质量若变差改回即可）。
 
 ## 验证与排障（踩过的坑）
 
@@ -92,3 +94,4 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 - `nmem config provider set <新 id>` 会把该条目**设为 active 并改写 `default` purpose**（background/ai_now 靠继承跟着走）。只想加条目、不想动路由时，加完立刻 `nmem config provider activate <原 provider>` 还原。
 - `provider test` 打的是 `<base>/remote-llm/test`，**不是** chat completions；想验证真实链路，用后台任务（`POST /agent/trigger/wm-refresh`）而不是 test。
 - 验证 timeout 是否生效：`nmem --json config provider list` 看条目里的 `timeout`；`journalctl -u nmem.service | grep "timed out after"` 看 nmem 日志自己打印的 effective timeout（超时行里带具体秒数）。
+- 验证某条 lane 是否真走网关：看 `requests.jsonl` 的 `thinking` 字段（`disabled(tools)` = 工具请求，其余为配置值）与系统提示特征——后台任务是 `Classify one durable memory` / `You maintain Nowledge Mem Working Memory` 之类，`nmem ask` 是流式 + 两次 `finish_reason=tool_calls`，交互对话是长 user/assistant 历史。
