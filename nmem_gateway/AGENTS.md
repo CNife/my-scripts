@@ -28,6 +28,10 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
   日志里记的是重组后的 `content` / `usage` / `chunks`。
 - **非流式**（工具调用类请求，如 `classify_memory_unit_type`）：读全后按 JSON 处理。
 
+客户端中途断连（nmem 取消或超时后直接关连接）不算故障：继续写响应会抛 `BrokenPipeError`，网关在
+`_close_stream()` 与 `Server.handle_error` 里吞掉 `BrokenPipeError` / `ConnectionResetError`——不刷 traceback，
+记录照写，`aborted` 字段区分 `null`（正常完成）/ `client_gone`（客户端先走）/ `upstream_error`（上游中断）。
+
 ## 配置
 
 `config.json`（**不入库、权限 600**），字段见 `config.example.json`：
@@ -70,6 +74,8 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 - 健康检查：`curl 127.0.0.1:8899/health`。
 - **上游 UA 必须显式设置**：OpenCode Go 在 Cloudflare 后面，urllib 默认的 `Python-urllib/3.x` 会被挡成 `403 error code: 1010`；`upstream_headers` 里必须带 `User-Agent`（`nmem-gw/1.0` 就够）。
 - 一次性 `loginctl enable-linger <user>` 需要 sudo（不带会报 `Could not enable linger: Access denied`）。
+- 改完 `gateway.py` 要重装并重启：`scp gateway.py <server>:~/.local/share/nmem-gw/` + `systemctl --user restart nmem-gw`（会中断正在进行的流；配置 `config.json` 每请求重读，不用重启）。
+- **nmem 侧 provider 的 `timeout` 必须 ≥ 上游最慢请求**：`max_tokens` 抬到 16384 后单请求会跑到 55–62s，provider 里写死的 `timeout: 60.0` 会在到点时断开 SSE，nmem 侧表现为 `scheduler LLM generation timed out after 60.000s` + 任务 partial。该值在服务端 `~/.config/co.nowledge.mem.desktop/remote_llm.json` 的 `providers["openai_compatible:nmem-gw"].timeout`（现为 180.0）；CLI 的 `nmem config provider set` 没有 timeout 选项，只能改文件。
 
 ## 纪律
 
@@ -84,3 +90,4 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 - CLI 上的 `--api-url` 覆盖的是 **CLI 要连的 nmem 服务器地址**，不是 provider 的 base URL。把它指向本机网关只会得到 `Connection refused`（请求根本没到服务端）。
 - `nmem config provider set <新 id>` 会把该条目**设为 active 并改写 `default` purpose**（background/ai_now 靠继承跟着走）。只想加条目、不想动路由时，加完立刻 `nmem config provider activate <原 provider>` 还原。
 - `provider test` 打的是 `<base>/remote-llm/test`，**不是** chat completions；想验证真实链路，用后台任务（`POST /agent/trigger/wm-refresh`）而不是 test。
+- 验证 timeout 是否生效：`nmem --json config provider list` 看条目里的 `timeout`；`journalctl -u nmem.service | grep "timed out after"` 看 nmem 日志自己打印的 effective timeout（超时行里带具体秒数）。

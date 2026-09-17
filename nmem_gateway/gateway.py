@@ -172,6 +172,17 @@ def forward(
         return status, response.read(), content_type
 
 
+class Server(ThreadingHTTPServer):
+    """客户端中途断连（nmem 取消或超时后关连接）不是故障，不该刷 traceback。"""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            logger.debug("客户端断连：{}", client_address)
+            return
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "nmem-gw/1"
     protocol_version = "HTTP/1.1"
@@ -208,6 +219,14 @@ class Handler(BaseHTTPRequestHandler):
         if last:
             self.wfile.write(b"0\r\n\r\n")
 
+    def _close_stream(self) -> bool:
+        """补上 chunked 结束块；客户端已经走了就返回 False，不抛栈。"""
+        try:
+            self._write_chunk(b"", last=True)
+        except (BrokenPipeError, ConnectionResetError):
+            return False
+        return True
+
     def _proxy_stream(
         self, started: float, response: Any, notes: dict[str, Any], cfg: dict[str, Any]
     ) -> None:
@@ -224,6 +243,7 @@ class Handler(BaseHTTPRequestHandler):
         usage: Any = None
         finish: Any = None
         chunks = 0
+        aborted: str | None = None
         strip = cfg.get("strip_reasoning", True)
         try:
             for raw in response:
@@ -257,11 +277,15 @@ class Handler(BaseHTTPRequestHandler):
                             )
                 self._write_chunk(out)
                 chunks += 1
+        except (BrokenPipeError, ConnectionResetError):
+            aborted = "client_gone"
         except Exception as exc:
+            aborted = "upstream_error"
             logger.error("流式转发中断：{}", exc)
         finally:
             response.close()
-            self._write_chunk(b"", last=True)
+            if aborted is None and not self._close_stream():
+                aborted = "client_gone"
 
         self._record(
             started,
@@ -272,6 +296,7 @@ class Handler(BaseHTTPRequestHandler):
             finish_reason=finish,
             usage=usage,
             content="".join(text),
+            aborted=aborted,
             **notes,
         )
 
@@ -375,7 +400,7 @@ def main() -> None:
         cfg.get("thinking"),
         log_path,
     )
-    ThreadingHTTPServer((host, int(port)), Handler).serve_forever()
+    Server((host, int(port)), Handler).serve_forever()
 
 
 if __name__ == "__main__":
