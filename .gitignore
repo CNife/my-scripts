@@ -31,3 +31,7 @@ output/
 .ruff_cache/
 .pytest_cache/
 **/__pycache__/
+
+# nmem gateway（私密配置与日志）
+nmem_gateway/config.json
+nmem_gateway/requests.jsonl
