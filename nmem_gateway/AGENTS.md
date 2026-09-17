@@ -76,6 +76,7 @@ nmem(background) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端
 - 一次性 `loginctl enable-linger <user>` 需要 sudo（不带会报 `Could not enable linger: Access denied`）。
 - 改完 `gateway.py` 要重装并重启：`scp gateway.py <server>:~/.local/share/nmem-gw/` + `systemctl --user restart nmem-gw`（会中断正在进行的流；配置 `config.json` 每请求重读，不用重启）。
 - **nmem 侧 provider 的 `timeout` 必须 ≥ 上游最慢请求**：`max_tokens` 抬到 16384 后单请求会跑到 55–62s，provider 里写死的 `timeout: 60.0` 会在到点时断开 SSE，nmem 侧表现为 `scheduler LLM generation timed out after 60.000s` + 任务 partial。该值在服务端 `~/.config/co.nowledge.mem.desktop/remote_llm.json` 的 `providers["openai_compatible:nmem-gw"].timeout`（现为 180.0）；CLI 的 `nmem config provider set` 没有 timeout 选项，只能改文件。
+- **目标运行时 3.14**：PEP 723 声明 `>=3.14`，uv 会自己下载并使用 3.14（系统自带的 3.13 只是 host，不参与运行）。部署后核对：`ls ~/.cache/uv/environments-v2/gateway-*/bin/python` 再 `-V`，应显示 3.14。仓库 ruff 目标就是 `py314`，3.14 原生语法（如 PEP 758 的无括号 `except A, B:`）照常用，别为迁就旧解释器改写法。
 
 ## 纪律
 
