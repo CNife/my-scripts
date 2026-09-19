@@ -17,7 +17,7 @@ nmem 自己拥有出站请求契约，用户无法干预：provider 的 `extra_p
 nmem(default/background/ai_now/ocr) --HTTP--> 127.0.0.1:8899/v1/chat/completions --> 上游 LLM 端点
 ```
 
-每个请求固定五步：读配置 → 覆盖 `model`/`max_tokens`/`thinking`/`reasoning_effort` → 转发 → 剥离响应里的推理内容 → 记一行 JSONL。唯一的分支在思考开关上：**带 `tools` 的请求强制关思考**（见下）。
+每个请求固定六步：读配置 → 覆盖 `model`/`max_tokens`/`thinking`/`reasoning_effort` → 转发 → 剥离响应里的推理内容 → 把 usage 里为 null 的数值补成 0 → 记一行 JSONL。唯一的分支在思考开关上：**带 `tools` 的请求强制关思考**（见下）。
 
 `GET .../models` 原样代理给上游（nmem 凭据就绪后会查模型列表）；`GET .../health` 返回 `{"status":"ok"}`。
 
@@ -31,6 +31,22 @@ nmem(default/background/ai_now/ocr) --HTTP--> 127.0.0.1:8899/v1/chat/completions
 客户端中途断连（nmem 取消或超时后直接关连接）不算故障：继续写响应会抛 `BrokenPipeError`，网关在
 `_close_stream()` 与 `Server.handle_error` 里吞掉 `BrokenPipeError` / `ConnectionResetError`——不刷 traceback，
 记录照写，`aborted` 字段区分 `null`（正常完成）/ `client_gone`（客户端先走）/ `upstream_error`（上游中断）。
+
+### 响应侧的 usage 兼容（上游 schema 漂移）
+
+nmem 的 Rust 结构体把 `usage` 里的数值字段当 `usize`，上游给 `null` 会让它整条响应报
+`CompletionError: JsonError: invalid type: null, expected usize`——流式下 nmem 会当场断开（日志
+`aborted=client_gone`），后台任务整轮失败。
+
+实测一次（2026-09-17 23:14 ~ 09-18 20:40）：上游在 SSE 末尾的 usage-only chunk 里给了
+`"prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": null}`，报错列号 304 正是该字段
+在 chunk 里的位置；窗口内 1088 次请求里 484 次被 nmem 断开，26 次 `insight_detection` /
+`crystallization_review` / `skill_target_review` 报 `llm_execution_failed`（每小时各一次）；上游自己
+改回去后报错与断连同时消失。
+
+网关的应对：`fill_null_numbers()` 把 `usage` 树里为 `null` 的字段补成 `0`，流式逐 chunk、非流式整包都过，
+补过的路径记进日志的 `filled` 字段（与 `stripped` 并列）。假设 usage 里没有用 `null` 表示的对象字段
+（实测 3304 条请求无此形态）；哪天 `filled` 里出现对象字段的路径，说明该假设不成立，要改成按类型判断。
 
 ## 配置
 
@@ -95,3 +111,6 @@ nmem(default/background/ai_now/ocr) --HTTP--> 127.0.0.1:8899/v1/chat/completions
 - `provider test` 打的是 `<base>/remote-llm/test`，**不是** chat completions；想验证真实链路，用后台任务（`POST /agent/trigger/wm-refresh`）而不是 test。
 - 验证 timeout 是否生效：`nmem --json config provider list` 看条目里的 `timeout`；`journalctl -u nmem.service | grep "timed out after"` 看 nmem 日志自己打印的 effective timeout（超时行里带具体秒数）。
 - 验证某条 lane 是否真走网关：看 `requests.jsonl` 的 `thinking` 字段（`disabled(tools)` = 工具请求，其余为配置值）与系统提示特征——后台任务是 `Classify one durable memory` / `You maintain Nowledge Mem Working Memory` 之类，`nmem ask` 是流式 + 两次 `finish_reason=tool_calls`，交互对话是长 user/assistant 历史。
+- 验证 usage 兼容是否在起作用：看 `requests.jsonl` 的 `filled` 字段——非空（如
+  `["usage.prompt_tokens_details.cache_write_tokens"]`）说明上游又给了 null、网关已补零；`filled` 为空
+  表示上游本轮没给 null，不代表这段代码没跑。
