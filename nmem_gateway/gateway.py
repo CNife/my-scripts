@@ -7,14 +7,15 @@
 
     nmem(background purpose) --HTTP--> 本网关 --HTTPS--> 上游 LLM 端点
 
-每个请求固定做五件事，没有任何按 lane 的分支：
+每个请求固定做六件事，没有任何按 lane 的分支：
 
   1. 读配置（每请求重读；读/解析失败则沿用上次成功值，坏配置不打死正在跑的服务）
   2. 覆盖 ``model`` / ``max_tokens`` / ``thinking`` / ``reasoning_effort``
      （配置为 null 则不动那一个字段；``thinking`` 显式设为 null 表示删除该字段）
   3. 转发到 ``upstream_base_url`` + ``/chat/completions``（``/models`` 原样代理），带配置里的头与上游密钥
   4. 剥离响应里的推理内容（``reasoning_content`` / ``reasoning`` / ``reasoning_details``）
-  5. 追加一行 JSONL 到日志
+  5. 把 usage 里为 null 的数值字段补成 0（nmem 把这类字段当 ``usize``，收到 null 会整条响应报错）
+  6. 追加一行 JSONL 到日志
 
 配置：同目录的 ``config.json``（不入库，权限 600），字段见 ``config.example.json``。
 可用环境变量 ``GW_CONFIG`` 指向别处。
@@ -109,21 +110,46 @@ def rewrite(body: bytes, cfg: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     return json.dumps(payload, ensure_ascii=False).encode(), notes
 
 
-def strip_reasoning(raw: bytes) -> tuple[bytes, list[str]]:
-    """删掉响应消息里的推理内容，返回 (新响应体, 命中的字段名)。"""
+def fill_null_numbers(usage: Any, path: str = "usage") -> list[str]:
+    """把 usage 里为 null 的数值字段补成 0，返回补过的路径。
+
+    上游 schema 漂移时会给 null（实测 2026-09-17~18 的
+    ``prompt_tokens_details.cache_write_tokens``），而 nmem 的 Rust 结构体把这类字段当
+    ``usize``，收到 null 直接 JsonError 掉整条响应。假设：usage 里没有用 null 表示的对象字段
+    （实测 3304 条请求无此形态）；真出现时路径会记进日志的 ``filled`` 字段。
+    """
+    if not isinstance(usage, dict):
+        return []
+    filled: list[str] = []
+    for key, value in usage.items():
+        if value is None:
+            usage[key] = 0
+            filled.append(f"{path}.{key}")
+        else:
+            filled.extend(fill_null_numbers(value, f"{path}.{key}"))
+    return filled
+
+
+def clean_response(raw: bytes, strip: bool) -> tuple[bytes, list[str], list[str]]:
+    """处理响应体：按需剥离推理内容，并把 usage 里为 null 的数值补成 0。
+
+    返回 ``(新响应体, 命中的推理字段, 补零的 usage 路径)``；两件事都没发生时原样返回上游字节。
+    """
     payload = as_json(raw)
     if not isinstance(payload, dict):
-        return raw, []
+        return raw, [], []
     hit: list[str] = []
-    for choice in payload.get("choices") or []:
-        message = choice.get("message") if isinstance(choice, dict) else None
-        if isinstance(message, dict):
-            for key in REASONING_KEYS:
-                if message.pop(key, None) is not None:
-                    hit.append(key)
-    if not hit:
-        return raw, []
-    return json.dumps(payload, ensure_ascii=False).encode(), hit
+    if strip:
+        for choice in payload.get("choices") or []:
+            message = choice.get("message") if isinstance(choice, dict) else None
+            if isinstance(message, dict):
+                for key in REASONING_KEYS:
+                    if message.pop(key, None) is not None:
+                        hit.append(key)
+    filled = fill_null_numbers(payload.get("usage"))
+    if not hit and not filled:
+        return raw, [], []
+    return json.dumps(payload, ensure_ascii=False).encode(), hit, filled
 
 
 def open_upstream(
@@ -237,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
     def _proxy_stream(
         self, started: float, response: Any, notes: dict[str, Any], cfg: dict[str, Any]
     ) -> None:
-        """把上游 SSE 逐行透传给 nmem，顺手剥掉思考增量，并把整段内容记进日志。"""
+        """把上游 SSE 逐行透传给 nmem，顺手剥掉思考增量、补掉 usage 里的 null，并记进日志。"""
         self.send_response(response.status)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -246,6 +272,7 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
         hits: list[str] = []
+        filled: list[str] = []
         text: list[str] = []
         usage: Any = None
         finish: Any = None
@@ -262,6 +289,9 @@ class Handler(BaseHTTPRequestHandler):
                         if isinstance(parsed, dict):
                             if isinstance(parsed.get("usage"), dict):
                                 usage = parsed["usage"]
+                                for path in fill_null_numbers(usage):
+                                    if path not in filled:
+                                        filled.append(path)
                             for choice in parsed.get("choices") or []:
                                 if not isinstance(choice, dict):
                                     continue
@@ -300,6 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             upstream_status=response.status,
             chunks=chunks,
             stripped=hits,
+            filled=filled,
             finish_reason=finish,
             usage=usage,
             content="".join(text),
@@ -360,15 +391,14 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         status, upstream_body, content_type = forward("POST", UPSTREAM_PATH, rewritten, cfg)
-        payload, stripped = strip_reasoning(upstream_body)
-        if not cfg.get("strip_reasoning", True):
-            payload, stripped = upstream_body, []
+        payload, stripped, filled = clean_response(upstream_body, cfg.get("strip_reasoning", True))
         self._send(status, payload, content_type)
         self._record(
             started,
             method="POST",
             upstream_status=status,
             stripped=stripped,
+            filled=filled,
             request=as_json(rewritten),
             response=as_json(payload),
             **notes,
