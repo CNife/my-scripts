@@ -3,7 +3,7 @@
         {
             "name": "红利",
             "code": "022980.OF",
-            "target_weight": 0.55
+            "target_weight": 0.6
         },
         {
             "name": "大盘",
@@ -13,7 +13,7 @@
         {
             "name": "成长",
             "code": "022910.OF",
-            "target_weight": 0.15
+            "target_weight": 0.1
         }
     ]
 }
